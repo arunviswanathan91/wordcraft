@@ -36,6 +36,29 @@ pub(crate) fn wrap_text_items(ui: &mut Ui, app: &mut WordApp) {
     mi_check(ui, app, "Lock Anchor", locked, "arrange.lockAnchor", json!({"value": !locked}));
 }
 
+/// Arrange › Position: the nine places in the margins (Square wrapping), then a figure across
+/// the top or bottom of the page (Top and Bottom wrapping, anchor locked).
+pub(super) fn position_menu(ui: &mut Ui, app: &mut WordApp) {
+    menu_button(ui, app, crate::widgets::MenuButtonOptions::new("position", Some("Position"), "Position", true, "arrange.position"), |ui, app| {
+        for (label, preset) in [
+            ("Top Left", "topLeft"),
+            ("Top Center", "topCenter"),
+            ("Top Right", "topRight"),
+            ("Middle Left", "middleLeft"),
+            ("Middle Center", "middleCenter"),
+            ("Middle Right", "middleRight"),
+            ("Bottom Left", "bottomLeft"),
+            ("Bottom Center", "bottomCenter"),
+            ("Bottom Right", "bottomRight"),
+        ] {
+            mi(ui, app, label, "arrange.position", json!({"preset": preset}));
+        }
+        ui.separator();
+        mi(ui, app, "Figure at Top of Page", "arrange.position", json!({"preset": "figureTop"}));
+        mi(ui, app, "Figure at Bottom of Page", "arrange.position", json!({"preset": "figureBottom"}));
+    });
+}
+
 /// Arrange › Rotate: turn 90° either way or flip (the angle and mirroring, not the pixels).
 /// Arrange › Wrap Text: how the selected object sits in the text, and (Square, Tight, Through)
 /// which of its sides text flows on.

@@ -124,7 +124,7 @@ pub(super) fn shape_format(app: &mut WordApp, ui: &mut Ui) {
     });
     shape_text_group(app, ui);
     group(ui, "Arrange", None, app, |ui, app| {
-        big(ui, app, "position", "Position", "arrange.position", json!({}), false);
+        super::arrange::position_menu(ui, app);
         wrap_menu(ui, app);
         stack(ui, |ui| {
             rotate_menu(ui, app, Some("Rotate"));

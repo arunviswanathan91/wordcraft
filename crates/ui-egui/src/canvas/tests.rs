@@ -2244,6 +2244,7 @@ fn right_click_on_a_picture_offers_wrap_text() {
         h.step();
     }
     assert!(h.query_by_label_contains("Fix Position on Page").is_some(), "the anchoring choices are offered");
+    assert!(h.query_by_label_contains("Lock Anchor").is_some(), "and Lock Anchor");
     h.get_by_label_contains("Square").click();
     for _ in 0..3 {
         h.step();

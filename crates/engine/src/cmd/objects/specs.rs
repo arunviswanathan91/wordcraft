@@ -209,6 +209,13 @@ pub fn specs() -> Vec<CommandSpec> {
             .when(has_floating),
         CommandSpec::new("arrange.position", "Position", "Layout › Arrange", |s, v| {
             let preset = p::str(v, "preset").unwrap_or("middleCenter").to_string();
+            if let Some(top) = match preset.as_str() {
+                "figureTop" => Some(true),
+                "figureBottom" => Some(false),
+                _ => None,
+            } {
+                return with_float(s, |f| figure_at_page_edge(f, top));
+            }
             let (x, y) = (p::f32(v, "x"), p::f32(v, "y"));
             let sect = crate::cmd::page::sect(s);
             let size = selected(s).map(|(_, o)| obj_size(&o)).unwrap_or((72.0, 72.0));
@@ -226,7 +233,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 f.y = y.unwrap_or(row);
             })
         })
-        .params(r#"{"preset"?: "topLeft|topCenter|topRight|middleLeft|middleCenter|middleRight|bottomLeft|bottomCenter|bottomRight", "x"?: pt, "y"?: pt}"#)
+        .params(r#"{"preset"?: "topLeft|topCenter|topRight|middleLeft|middleCenter|middleRight|bottomLeft|bottomCenter|bottomRight" (Square wrapping, at that place in the margins) | "figureTop|figureBottom" (a figure across the top or bottom of the page: centred, Top and Bottom wrapping, anchor locked, so editing the text never moves it on its page), "x"?: pt, "y"?: pt}"#)
         .when(has_placeable),
         CommandSpec::new("arrange.bringForward", "Bring Forward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::InFrontOfText)).when(has_placeable),
         CommandSpec::new("arrange.sendBackward", "Send Backward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::BehindText)).when(has_placeable),
@@ -367,4 +374,27 @@ pub fn specs() -> Vec<CommandSpec> {
             _ => Some("select a text box linked to another first"),
         }),
     ]
+}
+
+/// Position › Figure at Top / Bottom of Page: centred between the margins at the top (or bottom)
+/// of the text area, Top and Bottom wrapping and the anchor locked. Text never runs beside it, and
+/// its place on the page depends only on the page its paragraph is on, so editing the text above
+/// can't move it on its page. Standard DrawingML settings: Word shows it the same way.
+fn figure_at_page_edge(f: &mut wordcraft_doc::para::Float, top: bool) {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    f.wrap = Wrap::TopAndBottom;
+    f.h_rel = Anchor::Margin;
+    f.v_rel = Anchor::Margin;
+    f.h_align = Some(FloatAlign::Center);
+    f.v_align = Some(if top { FloatAlign::Start } else { FloatAlign::End });
+    (f.x, f.y) = (0.0, 0.0);
+    // Room between the figure and the text: below it at the top of the page, above it at the
+    // bottom (12 pt), unless the object already has some.
+    if top && f.dist_bottom == 0.0 {
+        f.dist_bottom = 12.0;
+    }
+    if !top && f.dist_top == 0.0 {
+        f.dist_top = 12.0;
+    }
+    f.locked = true;
 }

@@ -7537,3 +7537,32 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
 }
+
+/// Picture Format › Position is a menu: Word's nine places in the margins, then Figure at Top or
+/// Bottom of Page, which wraps the picture Top and Bottom and locks its anchor.
+#[test]
+fn position_menu_offers_the_figure_placements() {
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Text before the picture "})).unwrap();
+    let data = wordcraft_engine::cmd::insert::base64_encode(&png_bytes([200, 30, 30, 255]));
+    a.run("insert.picture", json!({"data": data, "width": 160})).unwrap();
+    let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
+    let end = wordcraft_doc::Pos { off: pos.off + wordcraft_doc::para::OBJ.len_utf8(), ..pos.clone() };
+    a.session.sel = wordcraft_engine::Selection { anchor: pos.clone(), focus: end };
+    a.ui_command("ui.tab", &json!({"tab": "Picture Format"})).unwrap().unwrap();
+    let mut h = harness(a);
+    for _ in 0..4 {
+        h.step();
+    }
+    h.get_by_label("Position").click();
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(h.query_by_label_contains("Top Left").is_some() && h.query_by_label_contains("Bottom Right").is_some(), "Word's nine places");
+    h.get_by_label_contains("Figure at Top of Page").click();
+    for _ in 0..3 {
+        h.step();
+    }
+    let f = wordcraft_engine::cmd::objects::selected(&h.state().session).unwrap().1.frame().unwrap().2.clone();
+    assert_eq!((f.wrap, f.locked), (wordcraft_doc::para::Wrap::TopAndBottom, true), "{f:?}");
+}
