@@ -26,6 +26,8 @@ use wordcraft_doc::{Block, Path, Pos, StoryRef};
 
 use crate::{CmdError, CmdResult, CommandSpec, Session};
 
+mod detect;
+
 /// Most problems reported (and repaired by one command): a hostile document can't make the
 /// answer, or the repair loop, unbounded.
 pub const MAX_ITEMS: usize = 1000;
@@ -43,6 +45,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("numbering.repair", "Repair Heading Numbering", "Home › Paragraph › Multilevel List", repair).params(
             r#"{"items"?: [{"kind", "path": [block]}] (from numbering.check; default every problem), "kinds"?: ["otherList"|"restart"|"skippedLevel"|"doubleNumber"] (only these)} → {"fixed": [{"kind", "path", "repair"}], "remaining": numbering.check's items} — otherList and restart: the heading goes back to the heading list; skippedLevel: the heading and the headings under it go up to the level after the heading before them; doubleNumber: the typed number is deleted. One undo step"#,
+        ),
+        CommandSpec::new("numbering.detect", "Find Typed Heading Numbers", "Home › Paragraph › Multilevel List", |s, _| Ok(detect::report(s)))
+            .params(r#"{} → {"candidates": [{"path": [block], "number": the typed number, "text": the heading's start, "level": 1-9, "confidence": "high|medium|low", "convertible": bool (false: letters or roman numerals), "reasons": [...]}] (at most 1000)}: paragraphs whose numbers were typed as text ("3.2.1 Methods")"#)
+            .pure(),
+        CommandSpec::new("numbering.convert", "Convert Typed Heading Numbers", "Home › Paragraph › Multilevel List", detect::convert).params(
+            r#"{"items"?: [{"path": [block], "level"?: 1-9}] (from numbering.detect; default every convertible candidate with high or medium confidence)} → {"converted": [{"path", "number", "level"}], "scheme": list id}: the typed number goes, the paragraph becomes Heading <level> and is numbered with the heading list (the 1 / 1.1 / 1.1.1 list is made when there is none); numbers that didn't start at 1 keep their values. One undo step"#,
         ),
     ]
 }
