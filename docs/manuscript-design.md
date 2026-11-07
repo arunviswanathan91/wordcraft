@@ -951,7 +951,7 @@ described here.
 
 | # | Scope | Estimate |
 |---|---|---|
-| 0 | Engine fixes from [Figures](#engine-fixes-this-depends-on): Lock Anchor, the Fix Position on Page drag reset (after observing Word), Keep with Next on captions, top and bottom of page placement presets. Separate pull requests | 3–5 days |
+| 0 | Engine fixes from [Figures](#engine-fixes-this-depends-on): Lock Anchor, the Fix Position on Page drag reset, Keep with Next on captions (**done**; the drag behaviour is still to be confirmed against Word); top and bottom of page placement presets (to do) | 3–5 days |
 | 0b | Numbering in the engine, for any document: `numbering.check`, `numbering.repair`, `numbering.detect` with their task pane (see [Heading and list numbering](#heading-and-list-numbering)) | 1.5–2 weeks |
 | 1 | `crates/manuscript`: project format, cache (with heading and caption counts), binder commands, numbering start sync, snapshots, CLI `project` subcommands, tests. No UI | 1–1.5 weeks |
 | 2 | Compile: pipeline, bookmark renaming, sources merge, heading-list mapping, per-chapter captions, figure normalisation, cross-section references, roles and generated items, page numbering zones (with the uncounted-page pass), checks, presets, fixtures | 2.5–3 weeks |
@@ -999,6 +999,7 @@ maintainers.
 
 | Date | Change |
 |---|---|
+| 2026-11-07 | Milestone 0: Lock Anchor, the drag fix and caption Keep with Next implemented |
 | 2026-11-07 | Heading and list numbering: one scheme per project, check and repair of split lists, restarts, skipped levels, double and typed numbers, and stale references; detection of typed numbers on import; numbers kept across separate section files. Cross-section reference fields locked in every section file, with `project.refreshReferences`. `section_setup` preset option. HTML and Markdown outputs. Fork owner's choices recorded for the open questions |
 | 2026-11-07 | Structure, page numbering and templates: item roles (placing the cover, contents, index and others), page numbering zones (roman front matter, restarts, uncounted and hidden pages, odd-page starts) mapped to existing section properties, project templates with metadata, export sets (front pages or each chapter separately, numbers as in the full document) |
 | 2026-11-07 | Stacked view of separate section documents as the core of the design (speed, containing reflow). Corrections from review: LaTeX output exists; per-chapter captions; directly numbered headings; section breaks inside section files; pictures already stored once. Added figure presets and normalisation, engine fixes found in the code (Lock Anchor, the Fix Position on Page drag reset, caption Keep with Next), supervisor round trip, checks before submission, Zotero licensing notes, recommendations for the open questions |
