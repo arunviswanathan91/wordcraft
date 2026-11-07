@@ -39,6 +39,10 @@ pub struct ViewState {
     /// The Accessibility pane (Review › Check Accessibility): the checker's findings.
     #[serde(default)]
     pub accessibility_pane: bool,
+    /// The Heading Numbering pane: what `numbering.check` and `numbering.detect` find, each with
+    /// its repair.
+    #[serde(default)]
+    pub numbering_pane: bool,
     /// The Alt Text pane (Picture/Shape Format › Alt Text): the selected object's or table's alt text.
     #[serde(default)]
     pub alt_text_pane: bool,
@@ -181,6 +185,7 @@ impl Default for ViewState {
             clipboard_pane: false,
             smart_art_pane: false,
             accessibility_pane: false,
+            numbering_pane: false,
             alt_text_pane: false,
             format_shape_pane: false,
             multi_page: false,

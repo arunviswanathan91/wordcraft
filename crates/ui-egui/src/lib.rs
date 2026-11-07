@@ -55,6 +55,7 @@ pub mod keytips;
 pub(crate) mod language_packs;
 mod local_time;
 pub mod mini_toolbar;
+pub mod numbering_pane;
 pub mod objects;
 pub mod options;
 pub mod panes;

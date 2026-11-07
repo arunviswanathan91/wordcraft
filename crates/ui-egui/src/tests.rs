@@ -7566,3 +7566,42 @@ fn position_menu_offers_the_figure_placements() {
     let f = wordcraft_engine::cmd::objects::selected(&h.state().session).unwrap().1.frame().unwrap().2.clone();
     assert_eq!((f.wrap, f.locked), (wordcraft_doc::para::Wrap::TopAndBottom, true), "{f:?}");
 }
+
+/// Home › Multilevel List › Check Heading Numbering opens the Heading Numbering pane: a problem
+/// is listed with its Fix, which repairs it, and headings with typed numbers can be ticked and
+/// numbered.
+#[test]
+fn heading_numbering_pane_fixes_and_converts() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Intro\n1.1 Background\n2 Methods\n2.1 Sites")), Services::default());
+    for (text, style) in [("Intro", "Heading 1"), ("1.1 Background", "Heading 2")] {
+        a.run("select.text", json!({"text": text})).unwrap();
+        a.run("styles.apply", json!({"style": style})).unwrap();
+    }
+    a.run("select.text", json!({"text": "Intro"})).unwrap();
+    a.run("list.multilevelPreset", json!({"preset": "headings"})).unwrap();
+    a.run("view.numberingPane", json!({"value": true})).unwrap();
+    let mut h = harness(a);
+    for _ in 0..4 {
+        h.step();
+    }
+    // "1.1 Background" is numbered and typed: a doubled number.
+    assert!(h.query_by_label_contains("Problems (1)").is_some(), "the doubled number is listed");
+    h.get_by_label_contains("Fix: delete the typed number").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    let text = |h: &egui_kittest::Harness<'_, WordApp>, k: usize| h.state().session.doc.body.get(k).and_then(|b| b.as_para()).map(|p| p.plain_text()).unwrap_or_default();
+    assert_eq!(text(&h, 1), "Background");
+    assert!(h.query_by_label_contains("No heading numbering problems found.").is_some());
+    // "2 Methods" and "2.1 Sites" were typed: ticked, then numbered.
+    assert!(h.query_by_label_contains("Typed heading numbers (2)").is_some());
+    h.get_by_label_contains("Number Ticked Headings").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!((text(&h, 2), text(&h, 3)), ("Methods".to_string(), "Sites".to_string()));
+    let styles: Vec<Option<String>> = h.state().session.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.style.clone()).collect();
+    assert_eq!(styles[2].as_deref(), Some("Heading1"));
+    assert_eq!(styles[3].as_deref(), Some("Heading2"));
+    assert!(h.query_by_label_contains("Typed heading numbers").is_none(), "nothing typed is left");
+}

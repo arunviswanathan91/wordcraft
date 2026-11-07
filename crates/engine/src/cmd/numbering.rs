@@ -294,6 +294,11 @@ fn check(s: &Session) -> (Option<Scheme>, usize, Vec<Item>) {
     (scheme, hs.len(), items)
 }
 
+/// `numbering.detect`'s answer for the session's document, for the Heading Numbering pane.
+pub fn typed(s: &Session) -> Value {
+    detect::report(s)
+}
+
 fn item_json(i: &Item) -> Value {
     json!({
         "kind": i.kind,
@@ -306,7 +311,8 @@ fn item_json(i: &Item) -> Value {
     })
 }
 
-fn report(s: &Session) -> Value {
+/// `numbering.check`'s answer for the session's document, for the Heading Numbering pane.
+pub fn report(s: &Session) -> Value {
     let (scheme, headings, items) = check(s);
     json!({
         "scheme": scheme.map(|sc| json!({"num": sc.num, "abstract": sc.abs})),
