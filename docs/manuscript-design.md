@@ -3,7 +3,9 @@
 > **Last updated:** 2026-11-07 · **Status:** proposal, nothing implemented. Describes a
 > project-based manuscript and thesis workflow: each chapter or section is its own document,
 > several are edited in one window as a continuous stack, and compile joins them into one DOCX,
-> PDF or LaTeX file. Open questions at the end need a maintainer decision before work starts.
+> PDF or LaTeX file, or into chosen parts such as the front pages or each chapter. Page
+> numbering, placement of the cover, contents and index, and thesis templates are set in the
+> binder. Open questions at the end need a maintainer decision before work starts.
 
 ## Why
 
@@ -175,11 +177,13 @@ id = "s0001"
 kind = "folder"
 title = "Front matter"
 include = true
+numbering = { zone = "front" }
 
   [[item.children]]
   id = "s0002"
   kind = "section"
   title = "Abstract"
+  role = "abstract"
   synopsis = "300 words on the question, method and finding."
   label = "front"
   status = "draft"            # free text; the UI offers todo / draft / revised / final
@@ -258,6 +262,8 @@ Everything is a command, as elsewhere in WordCraft. Programmatic calls never ope
 | `project.close` | `{}` | Save open sections and the binder |
 | `project.info` | `{}` | Binder tree, word counts, targets, open sections (pure) |
 | `project.updateStyles` | `{"template"?}` | Run `tools.updateStyles` on every section |
+| `project.saveAsTemplate` | `{"path"}` | Write the project's structure, presets, template and starter sections as a project template |
+| `project.setMetadata` | `{"key", "value"}` | Title, author, degree…; shown on the front pages through `DOCPROPERTY` fields |
 | `project.find`, `project.replace` | as `edit.find` / `edit.replace` | Across every included section; results name the section |
 | `binder.add` | `{"parent"?, "after"?, "kind", "title"}` | New item; a section gets an empty `.docx` made from the default preset's template |
 | `binder.import` | `{"path", "parent"?, "split"?: "none"\|"heading1"\|"heading2"}` | Bring in an existing document, optionally split at headings into one section each |
@@ -400,10 +406,9 @@ If chapter 3 refers to a figure in chapter 2, no section file can hold both ends
   continuously or per chapter as the preset says (above).
 - **Footnotes and endnotes** are already renumbered by `adopt`. Restarts per chapter come from the
   template's section properties.
-- **Page numbering** (roman for front matter, arabic from chapter 1) comes from the preset:
-  - the front-matter folder's separator starts a section numbered in roman;
-  - the first body folder restarts at 1.
-  - Both are existing section properties (Format Page Numbers).
+- **Page numbering** (cover not counted, roman front matter, arabic from chapter 1, skipped
+  pages) is set per binder item. See
+  [Structure, page numbering and templates](#structure-page-numbering-and-templates).
 
 ### Citations
 
@@ -428,6 +433,155 @@ If chapter 3 refers to a figure in chapter 2, no section file can hold both ends
     maintainer decision before any styles are bundled.
   - Assigning citation numbers in order of first appearance is the easy part. Formatting entries
     in a style is the hard part.
+
+## Structure, page numbering and templates
+
+A thesis has fixed parts in a fixed order, and university rules about how each part is numbered.
+Writers shouldn't have to build that from section breaks by hand. The binder holds it as data,
+and compile turns it into section properties.
+
+### Roles: placing the front page, introduction, contents and index
+
+Every item has a `role`. Roles tell compile what an item is, and templates use them for the
+default order. Placement is simply the item's position in the binder: dragging the Index item
+above the Appendices folder puts the index there.
+
+| Role | Item holds | Compile does |
+|---|---|---|
+| `cover`, `title`, `declaration`, `abstract`, `acknowledgements`, `dedication` | A section the writer edits (the cover and title page usually come from the template) | Places it; applies its numbering rule |
+| `contents`, `figures`, `tables`, `equations`, `bibliography`, `index` | No text of its own: a heading plus the generated content | Inserts the generated content at that position: `references.toc`, `references.tableOfFigures` (per caption label), `references.bibliography`, `references.index` |
+| `introduction`, `chapter`, `conclusion` | A section | Starts the main numbering if it is the first of these |
+| `appendix` | A section or folder | Applies the appendix numbering rule (below) |
+| `other` (default) | A section | Places it |
+
+- **Generated items can be repeated and customised.** For example:
+  - a contents list showing only levels 1–2 in front matter, plus a mini contents list at the
+    start of each part;
+  - a list of equations, which is a table of figures for the Equation caption label.
+- **Their options** are the existing commands' parameters, stored on the item (`[item.generate]`).
+
+### Page numbering zones
+
+Numbering is set per item, and inherited by its children unless they set their own.
+
+```toml
+[item.numbering]
+zone = "front"        # continue (default) | front | main | appendix | none
+counted = true        # false: the item's pages aren't counted (later pages number as if it weren't there)
+show = "all"          # all | not-first (number hidden on the item's first page) | none
+start_on = "next"     # next | odd (start on a right-hand page, a blank page added if needed) | even | continue
+```
+
+Each zone sets a format and a starting point. A template sets the formats; these are the
+defaults:
+
+| Zone | Format | Starts at |
+|---|---|---|
+| `front` | i, ii, iii | i at the first item of the zone |
+| `main` | 1, 2, 3 | 1 at the first item of the zone |
+| `appendix` | continue arabic, or A-1 (chapter-prefixed) as the template says | — |
+| `none` | no number shown, pages not counted | — |
+
+**A typical thesis then needs no settings at all, because the template supplies them:**
+
+| Item | Rule | Pages show |
+|---|---|---|
+| Cover | `zone = "none"` | nothing; not counted |
+| Title page | `zone = "front"`, `show = "none"` | nothing, but it is page i |
+| Declaration, Abstract, Contents | `front` | ii, iii, iv … |
+| Introduction | `main`, `start_on = "odd"` | 1, 2, 3 … |
+| Chapters | continue, `start_on = "odd"` | … |
+| A fold-out map inserted mid-chapter | `counted = false`, `show = "none"` | nothing; the next page continues the count |
+| Appendices | `appendix` | A-1, A-2 … or continuing arabic |
+
+**How compile does it.** Every rule maps to a section property the engine already has, in
+`SectionProps` (`crates/doc/src/section.rs`):
+- format: `page_num_format`, which includes the roman formats;
+- restart: `page_num_start`;
+- hidden number on the first page: `title_page`;
+- start on a right-hand page: `start` = `SectionStart::OddPage`, which layout already handles
+  (`crates/layout/src/tests.rs`);
+- chapter-prefixed numbers: `chapter_style`, `chapter_sep`.
+
+So the compiled document is an ordinary Word document with ordinary section breaks, and opens
+the same way in Word.
+
+**Uncounted pages need one extra step.** Word can only restart numbering, not skip pages. So:
+1. Compile lays the document out once.
+2. It reads how many pages each uncounted item takes.
+3. It sets the following section's `page_num_start` so the count carries on as if those pages
+   weren't there.
+4. It lays out again.
+
+A second check confirms the numbers settled. Layout is deterministic, so this ends after the
+second pass. If page counts still change (a contents list growing by a page, say), compile
+repeats, with a cap of a few passes, and warns if they never settle.
+
+**In the stack and the binder** the same rules give each item's page range from the cached page
+counts (`Title i`, `Abstract ii–iii`, `Chapter 1  1–23`). Writers see the numbering before
+compiling, and a wrong rule shows up at once.
+
+### Project templates
+
+A project template is a folder (or a `.zip` of one) that `project.new` copies from:
+
+```
+thesis-generic.wcproj-template/
+  template.toml        # name, description, licence of its text, metadata fields it asks for
+  project.toml         # binder with roles, numbering zones, generated items, compile presets, checks
+  templates/main.dotx  # styles, page setup, headers and footers
+  sections/            # starter sections: cover, title page, declaration with placeholder text
+```
+
+- **Metadata fills the front pages.**
+  - `[metadata]` in `project.toml` holds title, subtitle, author, degree, department,
+    supervisor, date and any extra keys the template declares.
+  - The cover and title page show them through `DOCPROPERTY` fields, which WordCraft already
+    supports (`crates/engine/src/cmd/references/properties.rs`). Compile copies the metadata into
+    the compiled document's properties.
+  - Changing the title in one place updates every page that shows it.
+- **Checks travel with the template.** A university's rules (word limit, minimum font size,
+  margins, line spacing, which parts are required) are entries under `[[check]]`, and
+  `compile.check` reports them.
+- **Making your own.**
+  - `project.saveAsTemplate {"path"}` writes the current project's structure, presets, template
+    and the sections marked as starters, without the rest of the text.
+  - Users adjust a generic template once for their university or company, and reuse it for
+    every report.
+- **Shipped templates** are WordCraft's own text and colours, as for document templates: Thesis,
+  Report, Book, Journal article. No university or publisher names or logos.
+
+### Saving and exporting parts separately: export sets
+
+A preset can produce several files at once, and choose which items go in. One project can then
+have:
+- "Full thesis (PDF)";
+- "Front pages only (PDF, for signing)";
+- "Each chapter as DOCX (for the supervisor)";
+- "Chapters 3–4 as a journal article (LaTeX)".
+
+```toml
+[[preset]]
+name = "Chapters for review"
+include_roles = ["introduction", "chapter", "conclusion"]   # or include_ids / include_labels
+split = "per-item"           # none (one file) | per-item | per-top-folder
+file_name = "{n:02}-{title}" # n = position in the output; title from the binder
+numbers = "as-in-full"       # as-in-full | standalone
+output = "docx"
+```
+
+- **`numbers = "as-in-full"`.** Each part keeps the page, figure and chapter numbers it has in
+  the full document: chapter 3 exported alone starts at page 41, with Figure 3.1. That is what a
+  supervisor or examiner expects.
+  - For PDF, compile builds the full document and writes only that part's pages. The print
+    command already takes page ranges; PDF export would get the same `pages` option.
+  - For DOCX, compile sets the part's `page_num_start` and starts its caption counts at their
+    values in the full document. The caption counter needs the per-sequence starting count also
+    used by the stack.
+- **`numbers = "standalone"`.** Each part numbers from 1 as a document of its own (the journal
+  case).
+- **Saving a part separately while writing** needs no export: every section is already its own
+  file. `binder.exportForReview` gives it a readable name and makes it safe to open in Word.
 
 ## Figures
 
@@ -601,6 +755,14 @@ before merging.
     before it is closed).
   - The cap on open sections holds.
   - Page offsets come out right after an earlier section grows by a page.
+- **Page numbering:**
+  - The typical thesis table above, compiled: assert the number shown on every page.
+  - An uncounted fold-out page mid-chapter.
+  - Odd-page chapter starts adding blank pages.
+  - A contents list that grows by a page between passes.
+  - Each numbering rule written to DOCX and read back.
+- **Export sets:** `per-item` output names. A chapter exported `as-in-full` starts at its page
+  and figure numbers in the full document.
 - **Figures:** Lock Anchor round-trips through DOCX. A locked picture keeps its anchor when
   dragged. A Fix Position on Page picture stays page-relative after a drag. Insert Caption sets
   Keep with Next.
@@ -630,9 +792,9 @@ described here.
 |---|---|---|
 | 0 | Engine fixes from [Figures](#engine-fixes-this-depends-on): Lock Anchor, the Fix Position on Page drag reset (after observing Word), Keep with Next on captions. Separate pull requests | 2–4 days |
 | 1 | `crates/manuscript`: project format, cache, binder commands, snapshots, CLI `project` subcommands, tests. No UI | 1–1.5 weeks |
-| 2 | Compile: pipeline, bookmark renaming, sources merge, heading-list mapping, per-chapter captions, figure normalisation, cross-section references, checks, presets, fixtures | 2–2.5 weeks |
+| 2 | Compile: pipeline, bookmark renaming, sources merge, heading-list mapping, per-chapter captions, figure normalisation, cross-section references, roles and generated items, page numbering zones (with the uncounted-page pass), checks, presets, fixtures | 2.5–3 weeks |
 | 3 | UI: stacked editor, binder sidebar, inspector, compile dialog, Project tab, targets | 2–3 weeks |
-| 4 | Corkboard, supervisor round trip, live caption offsets in the stack, web zip projects, import and split of a long `.docx` at headings | 2–3 weeks |
+| 4 | Project templates and metadata, export sets (split output, `as-in-full` numbering, PDF page ranges), corkboard, supervisor round trip, live caption offsets in the stack, web zip projects, import and split of a long `.docx` at headings | 2–3 weeks |
 | later | Abbreviation list (a marked-term list in front matter, with a check that each term is spelled out before its first use in binder order); Zotero rendering without Zotero, after the licence questions above | — |
 
 The first useful release is milestones 0–3: write in sections, see them together, reorder them,
@@ -673,5 +835,6 @@ Each has a recommendation; the decision is the maintainers'.
 
 | Date | Change |
 |---|---|
+| 2026-11-07 | Structure, page numbering and templates: item roles (placing the cover, contents, index and others), page numbering zones (roman front matter, restarts, uncounted and hidden pages, odd-page starts) mapped to existing section properties, project templates with metadata, export sets (front pages or each chapter separately, numbers as in the full document) |
 | 2026-11-07 | Stacked view of separate section documents as the core of the design (speed, containing reflow). Corrections from review: LaTeX output exists; per-chapter captions; directly numbered headings; section breaks inside section files; pictures already stored once. Added figure presets and normalisation, engine fixes found in the code (Lock Anchor, the Fix Position on Page drag reset, caption Keep with Next), supervisor round trip, checks before submission, Zotero licensing notes, recommendations for the open questions |
 | 2026-11-07 | First draft |
