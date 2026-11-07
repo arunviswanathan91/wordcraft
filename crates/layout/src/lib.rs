@@ -76,6 +76,7 @@ use notes::{MAX_NOTE_PASSES, footnote_pages};
 #[cfg(test)]
 use notes::{NOTE_SEP, note_numbers};
 use page::item_bottom;
+pub use page::margin_start;
 use pass::layout_pass;
 pub use pass::now_ms;
 pub use placed::{HfSlot, Placed, turn_point, turn_rect, unturn_point};

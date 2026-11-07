@@ -256,7 +256,7 @@ impl Writer<'_> {
                     ("simplePos", "0"),
                     ("relativeHeight", &self.z.to_string()),
                     ("behindDoc", behind),
-                    ("locked", "0"),
+                    ("locked", if float.locked { "1" } else { "0" }),
                     ("layoutInCell", if float.outside_cell { "0" } else { "1" }),
                     ("allowOverlap", "1"),
                 ],

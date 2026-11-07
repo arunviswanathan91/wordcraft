@@ -585,6 +585,15 @@ impl PageFrame<'_> {
     }
 }
 
+/// Where the Margin anchor area of a body page starts (left, top), in the page's coordinates as
+/// laid out, even pages already mirrored: the page is numbered `number` in section `sect`, and
+/// `mirror` is the document's Mirror Margins setting. For moving an object positioned relative
+/// to the margins to a point on the page.
+pub fn margin_start(sect: &SectionProps, number: u32, mirror: bool) -> (f32, f32) {
+    let (left, _, _) = PageFrame { sect, margin_top: None, origin: (0.0, 0.0), number, mirror }.sides();
+    (left, sect.margin_top)
+}
+
 /// The page `pb` is filling, for placing floating objects on it (`mirror`: [`Ctx::mirror`]).
 pub(crate) fn page_frame<'a>(pb: &PageBuilder<'a>, mirror: bool) -> PageFrame<'a> {
     PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror }

@@ -1440,3 +1440,95 @@ fn only_ink_members_pin_a_group() {
     }
     assert!(!holds_ink(&group), "a group of charts is not pinned");
 }
+
+/// Three paragraphs of several lines each, with a Square-wrapped rectangle anchored in the
+/// first, selected.
+fn three_paragraphs_and_a_shape() -> Session {
+    let text = "The quick brown fox jumps over the lazy dog. ".repeat(8);
+    let mut s = Session::new(wordcraft_doc::Document::from_text(&format!("{text}\n{text}\n{text}")));
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s
+}
+
+/// The top of top-level paragraph `k`'s first line on the first page.
+fn para_top(s: &mut Session, k: usize) -> f32 {
+    let layout = s.layout();
+    let lines = wordcraft_layout::hit::page_lines(&layout.pages[0], StoryRef::Body);
+    lines.iter().find(|l| *l.path == wordcraft_doc::Path::top(k)).unwrap().top
+}
+
+/// Lock Anchor: dragged beside another paragraph, a locked object keeps the paragraph it is
+/// anchored to (only its offsets change), where an unlocked one is anchored to the paragraph
+/// it is dropped beside. It lands where it was dropped either way.
+#[test]
+fn a_locked_anchor_stays_in_its_paragraph_when_dragged() {
+    let anchor = |s: &Session| selected(s).unwrap().0.path.clone();
+    let mut free = three_paragraphs_and_a_shape();
+    let y = para_top(&mut free, 2) + 4.0;
+    free.run("arrange.bounds", &json!({"page": 0, "x": 300, "y": y, "width": 60, "height": 30})).unwrap();
+    assert_eq!(anchor(&free), wordcraft_doc::Path::top(2), "unlocked: anchored where it was dropped");
+
+    let mut s = three_paragraphs_and_a_shape();
+    s.run("arrange.lockAnchor", &json!({"value": true})).unwrap();
+    let y = para_top(&mut s, 2) + 4.0;
+    s.run("arrange.bounds", &json!({"page": 0, "x": 300, "y": y, "width": 60, "height": 30})).unwrap();
+    assert_eq!(anchor(&s), wordcraft_doc::Path::top(0), "locked: still anchored in the first paragraph");
+    let o = object_area(&mut s);
+    assert!((o.rect.x - 300.0).abs() < 0.5 && (o.rect.y - y).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+    let f = selected(&s).unwrap().1.frame().unwrap().2.clone();
+    assert!(f.locked && moves_with_text(&f), "still locked and moving with its text: {f:?}");
+}
+
+/// Fix Position on Page survives a drag: the object stays relative to the page (or the
+/// margins, as Position › Top Left places it) at the point it was dropped, rather than turning
+/// into an object that moves with its text.
+#[test]
+fn a_fixed_position_object_stays_fixed_when_dragged() {
+    use wordcraft_doc::para::Anchor;
+    let frame = |s: &Session| selected(s).unwrap().1.frame().unwrap().2.clone();
+    let mut s = three_paragraphs_and_a_shape();
+    s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 200, "y": 300, "width": 60, "height": 30})).unwrap();
+    let f = frame(&s);
+    assert_eq!(f.v_rel, Anchor::Page, "{f:?}");
+    assert!(!moves_with_text(&f));
+    let o = object_area(&mut s);
+    assert!((o.rect.x - 200.0).abs() < 0.5 && (o.rect.y - 300.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+
+    s.run("arrange.position", &json!({"preset": "topLeft"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 150, "y": 350})).unwrap();
+    let f = frame(&s);
+    assert_eq!((f.h_rel, f.v_rel, f.h_align, f.v_align), (Anchor::Margin, Anchor::Margin, None, None), "{f:?}");
+    let o = object_area(&mut s);
+    assert!((o.rect.x - 150.0).abs() < 0.5 && (o.rect.y - 350.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+    // Text added above doesn't move it.
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": "A new first paragraph.\n"})).unwrap();
+    let o = object_area(&mut s);
+    assert!((o.rect.y - 350.0).abs() < 0.5, "fixed on the page: {:?}", o.rect);
+}
+
+/// Arrange › Lock Anchor: only for a floating object; set, cleared or toggled; one undo step,
+/// and none when nothing changes.
+#[test]
+fn lock_anchor_needs_a_floating_object_and_toggles() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Text"})).unwrap();
+    let data = super::super::insert::base64_encode(&png(20, 10));
+    s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+    assert!(s.run("arrange.lockAnchor", &json!({"value": true})).is_err(), "in line with text: no anchor to lock");
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    let locked = |s: &Session| selected(s).unwrap().1.frame().unwrap().2.locked;
+    let depth = s.undo_depth();
+    assert_eq!(s.run("arrange.lockAnchor", &json!({})).unwrap()["locked"], true);
+    assert!(locked(&s));
+    assert_eq!(s.undo_depth(), depth + 1);
+    s.run("arrange.lockAnchor", &json!({"value": true})).unwrap();
+    assert_eq!(s.undo_depth(), depth + 1, "already locked: no edit");
+    s.run("arrange.lockAnchor", &json!({})).unwrap();
+    assert!(!locked(&s));
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(locked(&s));
+}

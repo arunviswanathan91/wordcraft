@@ -897,3 +897,40 @@ fn output_gives_every_reference_its_bookmarks_text() {
     assert_eq!(results, expected);
     assert_eq!(results, ["First target", "Second target", "First target", REFERENCE_NOT_FOUND, "First target"]);
 }
+
+/// A caption stays on the page of the picture it describes: Insert Caption keeps an In Line
+/// with Text picture's paragraph with the caption below it, and a caption above with what
+/// follows. `keepWithObject: false` leaves Keep with Next alone.
+#[test]
+fn a_caption_is_kept_with_its_inline_picture() {
+    let data = crate::cmd::insert::base64_encode(&{
+        let img = image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 30, 30, 255]));
+        let mut b = Vec::new();
+        image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+        b
+    });
+    let keep = |s: &Session, k: usize| s.doc.body.get(k).and_then(|b| b.as_para()).and_then(|p| p.props.keep_next);
+    let picture = || {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Intro\n"));
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.picture", &json!({"data": data, "width": 100})).unwrap();
+        let (at, _) = crate::cmd::objects::selected(&s).expect("the picture is just before the caret");
+        let end = Pos { off: at.off + wordcraft_doc::para::OBJ.len_utf8(), ..at.clone() };
+        s.sel = Selection { anchor: at, focus: end };
+        assert!(crate::cmd::objects::object_selection(&s).is_some(), "the picture is selected");
+        s
+    };
+    let mut s = picture();
+    s.run("references.caption", &json!({"text": "Kiln"})).unwrap();
+    assert_eq!(keep(&s, 1), Some(true), "the picture's paragraph is kept with its caption");
+    assert_eq!(s.doc.body.get(2).and_then(|b| b.as_para()).map(|p| p.plain_text()).as_deref(), Some("Figure 1: Kiln"));
+
+    let mut s = picture();
+    s.run("references.caption", &json!({"text": "Lid", "position": "above"})).unwrap();
+    assert_eq!(s.doc.body.get(1).and_then(|b| b.as_para()).map(|p| p.plain_text()).as_deref(), Some("Figure 1: Lid"));
+    assert_eq!(keep(&s, 1), Some(true), "a caption above is kept with the picture");
+
+    let mut s = picture();
+    s.run("references.caption", &json!({"text": "Kiln", "keepWithObject": false})).unwrap();
+    assert_eq!(keep(&s, 1), None);
+}

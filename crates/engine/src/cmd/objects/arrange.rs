@@ -147,7 +147,9 @@ pub(super) fn move_object(s: &mut Session, pos: Pos, page: Option<u64>, x: f32, 
 }
 
 /// [`move_object`]'s one placement: move the object's character to the anchor under (x, y) on
-/// `page` and offset it from there.
+/// `page` and offset it from there. A locked anchor (Lock Anchor) stays where it is: only the
+/// offsets change. The object keeps the frames its offsets are measured in where it is fixed on
+/// the page or margins ("Fix Position on Page"); otherwise they are its column and paragraph.
 fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w, h): (f32, f32)) -> Result<Pos, CmdError> {
     use wordcraft_doc::para::Anchor;
     if pos.path.depth() > 0 || !movable_story(s, pos.story) {
@@ -159,52 +161,93 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
     // Keep a corner of it on the page.
     let x = x.max(12.0 - w).min(pg.w - 12.0);
     let y = y.max(12.0 - h).min(pg.h.min(MAX_OFFSET) - 12.0);
-    // The paragraph under the middle of its top edge: in the column it mostly lands in.
-    let (anchor, on_page) = match anchor_paragraph(&s.doc, &layout, page, (x + w / 2.0, y), story) {
-        Some(path) => (Pos { story, path, off: 0 }, false),
-        None => (nearest_line(&layout, page, y, story).ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?, true),
+    // How it is placed now (an inline object becomes Square, placed like a new float).
+    let before = s.doc.para_at(pos).and_then(|p| p.object_at(pos.off)).and_then(|o| o.frame().map(|(_, _, f)| f.clone()));
+    let before = before.filter(|f| f.wrap != Wrap::Inline);
+    let locked = before.as_ref().is_some_and(|f| f.locked);
+    // The frames its offsets end up in: page and margins stay; anything else follows the text.
+    let h_rel = match before.as_ref().map(|f| f.h_rel) {
+        Some(a @ (Anchor::Page | Anchor::Margin)) => a,
+        _ => Anchor::Column,
     };
-    // Move its character to the anchor, unless it's already in that paragraph and drawn on this
-    // page (one anchored on a later page of it is drawn there, #4250).
-    let at = if anchor.story == pos.story && anchor.path == pos.path && !on_page && layout.object(pos, page).is_some_and(|o| o.page == page) {
+    let v_rel = match before.as_ref().map(|f| f.v_rel) {
+        Some(a @ (Anchor::Page | Anchor::Margin)) => a,
+        // The margin bands are fixed on the page too ([`moves_with_text`]).
+        Some(Anchor::TopMargin | Anchor::BottomMargin | Anchor::InsideMargin | Anchor::OutsideMargin) => Anchor::Page,
+        _ => Anchor::Paragraph,
+    };
+    let at = if locked {
         pos.clone()
     } else {
-        let obj = s.doc.para_at(pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
-        let len = wordcraft_doc::para::OBJ.len_utf8();
-        s.doc.delete_range(pos, &Pos { off: pos.off + len, ..pos.clone() })?;
-        let mut at = anchor;
-        if at.story == pos.story && at.path == pos.path && at.off > pos.off {
-            at.off = at.off.saturating_sub(len);
+        // The paragraph under the middle of its top edge: in the column it mostly lands in.
+        let (anchor, on_page) = match anchor_paragraph(&s.doc, &layout, page, (x + w / 2.0, y), story) {
+            Some(path) => (Pos { story, path, off: 0 }, false),
+            None => (nearest_line(&layout, page, y, story).ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?, true),
+        };
+        // Move its character to the anchor, unless it's already in that paragraph and drawn on
+        // this page (one anchored on a later page of it is drawn there, #4250).
+        if anchor.story == pos.story && anchor.path == pos.path && !on_page && layout.object(pos, page).is_some_and(|o| o.page == page) {
+            pos.clone()
+        } else {
+            let obj = s.doc.para_at(pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
+            let len = wordcraft_doc::para::OBJ.len_utf8();
+            s.doc.delete_range(pos, &Pos { off: pos.off + len, ..pos.clone() })?;
+            let mut at = anchor;
+            if at.story == pos.story && at.path == pos.path && at.off > pos.off {
+                at.off = at.off.saturating_sub(len);
+            }
+            let at = s.doc.clamp(&at);
+            s.doc.insert_object(&at, obj, &wordcraft_doc::CharProps::default())?;
+            if on_page {
+                // Anchored to a line, not a paragraph start: fixed where it was dropped.
+                edit_float(s, &at, |f| place_on_page(f, x, y))?;
+                return Ok(at);
+            }
+            at
         }
-        let at = s.doc.clamp(&at);
-        s.doc.insert_object(&at, obj, &wordcraft_doc::CharProps::default())?;
-        at
     };
     // First on the page where it was dropped, so the text wraps around it as it will in the end.
-    edit_float(s, &at, |f| {
-        if f.wrap == Wrap::Inline {
-            f.wrap = Wrap::Square;
-        }
-        f.h_rel = Anchor::Page;
-        f.v_rel = Anchor::Page;
-        f.h_align = None;
-        f.v_align = None;
-        f.x = x.clamp(-MAX_OFFSET, MAX_OFFSET);
-        f.y = y.clamp(-MAX_OFFSET, MAX_OFFSET);
-    })?;
-    if on_page {
+    edit_float(s, &at, |f| place_on_page(f, x, y))?;
+    if h_rel == Anchor::Page && v_rel == Anchor::Page {
         return Ok(at);
     }
-    // Then offsets from its paragraph, as laid out with the object there.
+    // Then offsets in its frames, as laid out with the object there.
     s.touch();
-    let origin = s.layout().object(&at, page).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?.origin;
+    let layout = s.layout();
+    let hit = layout.object(&at, page).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
+    let (origin, on) = (hit.origin, hit.page);
+    let margin = layout.pages.get(on).map(|pg| {
+        let sect = s.doc.sections().get(pg.section).map(|(_, sp)| (*sp).clone()).unwrap_or_else(|| s.doc.last_section.clone());
+        wordcraft_layout::margin_start(&sect, pg.number, s.doc.settings.mirror_margins)
+    });
+    let start = |a: Anchor, para: f32, margin: Option<f32>| match a {
+        Anchor::Page => 0.0,
+        Anchor::Margin => margin.unwrap_or(0.0),
+        _ => para,
+    };
+    let (sx, sy) = (start(h_rel, origin.x, margin.map(|m| m.0)), start(v_rel, origin.y, margin.map(|m| m.1)));
     edit_float(s, &at, |f| {
-        f.h_rel = Anchor::Column;
-        f.v_rel = Anchor::Paragraph;
-        f.x = (x - origin.x).clamp(-MAX_OFFSET, MAX_OFFSET);
-        f.y = (y - origin.y).clamp(-MAX_OFFSET, MAX_OFFSET);
+        f.h_rel = h_rel;
+        f.v_rel = v_rel;
+        f.x = (x - sx).clamp(-MAX_OFFSET, MAX_OFFSET);
+        f.y = (y - sy).clamp(-MAX_OFFSET, MAX_OFFSET);
     })?;
     Ok(at)
+}
+
+/// Place a dragged object at (x, y) on its page: floating (Square if it was in line with the
+/// text), relative to the page, not aligned.
+fn place_on_page(f: &mut Float, x: f32, y: f32) {
+    use wordcraft_doc::para::Anchor;
+    if f.wrap == Wrap::Inline {
+        f.wrap = Wrap::Square;
+    }
+    f.h_rel = Anchor::Page;
+    f.v_rel = Anchor::Page;
+    f.h_align = None;
+    f.v_align = None;
+    f.x = x.clamp(-MAX_OFFSET, MAX_OFFSET);
+    f.y = y.clamp(-MAX_OFFSET, MAX_OFFSET);
 }
 
 /// Turn the selected floating object's alignment (left, centred, …) into an offset from its
@@ -259,6 +302,20 @@ pub(super) fn move_with_text(s: &mut Session, with_text: bool) -> CmdResult {
         f.y = y.clamp(-MAX_OFFSET, MAX_OFFSET);
     })?;
     Ok(json!({"object": serde_json::to_value(o).unwrap_or(Value::Null)}))
+}
+
+/// Lock Anchor (Word's Layout › Position option): keep the selected floating object anchored to
+/// its paragraph when it is dragged. `value` None toggles it.
+pub(super) fn lock_anchor(s: &mut Session, value: Option<bool>) -> CmdResult {
+    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let Some((_, _, float)) = obj.frame().filter(|(_, _, f)| f.wrap != Wrap::Inline) else {
+        return Err(CmdError::Disabled("select a floating picture or shape first".into()));
+    };
+    let on = value.unwrap_or(!float.locked);
+    if float.locked != on {
+        edit_float(s, &pos, |f| f.locked = on)?;
+    }
+    Ok(json!({"locked": on}))
 }
 
 /// The top-level paragraph of `story` under `(x, y)` on `page`: in the column under `x` (from

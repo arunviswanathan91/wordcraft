@@ -55,7 +55,8 @@ pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
     // text box (#1230). Otherwise next to the caret's top-level block: a paragraph, or the whole
     // table it is in.
     let f = s.sel.focus.clone();
-    let at = match crate::cmd::objects::object_selection(s) {
+    let object = crate::cmd::objects::object_selection(s).map(|(pos, o)| (pos, o.is_floating()));
+    let at = match &object {
         Some((pos, _)) => {
             let k = pos.path.last();
             pos.path.with_last(if above { k } else { k.saturating_add(1) })
@@ -65,7 +66,18 @@ pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
             Path::top(if above { top } else { top.saturating_add(1) })
         }
     };
+    // The caption stays on the page of what it describes: a caption above is kept with the next
+    // paragraph or table, and the paragraph of an In Line with Text picture is kept with its
+    // caption below. WordCraft's own default (`keepWithObject`), so a reflow can't leave a
+    // caption on the page after its figure.
+    let keep = p::bool(v, "keepWithObject").unwrap_or(true);
+    if keep && above {
+        para.props.keep_next = Some(true);
+    }
     s.doc.insert_block(f.story, &at, Block::Para(para))?;
+    if let Some((pos, false)) = object.filter(|_| keep && !above) {
+        s.doc.para_mut(pos.story, &pos.path)?.props.keep_next = Some(true);
+    }
     update_seq(s)?;
     let off = s.doc.para(f.story, &at).map_or(0, |p| p.len());
     s.sel = Selection::caret(Pos { story: f.story, path: at, off });
