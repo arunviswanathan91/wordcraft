@@ -186,6 +186,10 @@ pub struct Float {
     /// top. 0 = unknown, drawn in document order (objects inserted here, or from other formats).
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub z: u32,
+    /// The anchor is locked to its paragraph (`wp:anchor/@locked`, Word's Lock Anchor): dragging
+    /// the object changes only its offsets, never the paragraph it is anchored to.
+    #[serde(skip_serializing_if = "is_false")]
+    pub locked: bool,
 }
 
 /// Longest alternative text kept (characters): hostile files and commands are capped.

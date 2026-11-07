@@ -1270,6 +1270,28 @@ fn anchor_alignment_reference_areas_and_distances() {
     assert_eq!((b.dist, b.dist_top, b.dist_bottom), (0.0, 0.0, 0.0));
 }
 
+/// Lock Anchor (`wp:anchor/@locked`, VML `w10:anchorlock`) is read and saved: it used to be
+/// written as `locked="0"` whatever the file said, so a saved document lost every lock.
+#[test]
+fn anchor_lock_is_read_and_kept() {
+    let shape = |locked: &str| {
+        format!(
+            r#"<w:r><w:drawing><wp:anchor behindDoc="0" {locked}><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="127000" cy="127000"/><wp:wrapSquare wrapText="bothSides"/><wp:docPr id="1" name="S"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="rect"/></wps:spPr></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>"#
+        )
+    };
+    let vml = |lock: &str| {
+        format!(
+            r##"<w:r><w:pict xmlns:w10="urn:schemas-microsoft-com:office:word"><v:rect style="position:absolute;margin-left:0;margin-top:0;width:100pt;height:50pt" fillcolor="#336699"><w10:wrap type="square"/>{lock}</v:rect></w:pict></w:r>"##
+        )
+    };
+    let body = format!("<w:p>{}{}{}{}{}</w:p>", shape(r#"locked="1""#), shape(r#"locked="0""#), shape(""), vml("<w10:anchorlock/>"), vml(""));
+    let locks = |d: &Document| -> Vec<bool> { paras(d)[0].objects.iter().filter_map(|o| o.frame().map(|(_, _, f)| f.locked)).collect() };
+    let d = read_body(&body);
+    assert_eq!(locks(&d), [true, false, false, true, false]);
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(locks(&again), [true, false, false, true, false], "kept through a save");
+}
+
 #[test]
 fn anchor_stacking_order_is_read_and_kept() {
     let shape = |z: &str| {

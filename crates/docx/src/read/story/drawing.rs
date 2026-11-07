@@ -643,6 +643,8 @@ fn anchor_float(c: &El) -> Float {
     f.dist_bottom = dist("distB");
     // Required by the schema; a file leaving it out lays out in the cell, as before.
     f.outside_cell = !on_off_attr(c, "layoutInCell") && c.attr("layoutInCell").is_some();
+    // Lock Anchor (ECMA-376 Part 1, §20.4.2.3 `@locked`).
+    f.locked = on_off_attr(c, "locked");
     f
 }
 

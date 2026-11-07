@@ -597,6 +597,8 @@ fn vml_float(shape: &El, style: &str, in_hf: bool) -> Float {
         // Word for Mac draws a VML shape anchored in a header table cell on the page whatever
         // `o:allowincell` says (user-checked), as for Word's picture and text watermarks.
         outside_cell: in_hf,
+        // Lock Anchor in VML (ECMA-376 Part 4, §19.3.2.1 `w10:anchorlock`).
+        locked: shape.child("w10:anchorlock").is_some(),
         ..Float::default()
     };
     f.set_spin(vml_spin(style));

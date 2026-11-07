@@ -1,4 +1,4 @@
-use super::arrange::{MAX_OFFSET, bounds, copy_to, move_with_text, unalign};
+use super::arrange::{MAX_OFFSET, bounds, copy_to, lock_anchor, move_with_text, unalign};
 use super::group::{add_object, group, ungroup};
 use super::picture::{adjust, adjust_media, clear_lum, crop, original_media, recolor, relook, remove_background, reset, size};
 use super::select::{
@@ -204,6 +204,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("arrange.moveWithText", "Move with Text", "Layout › Arrange › Wrap Text", |s, v| move_with_text(s, p::bool(v, "value").unwrap_or(true)))
             .params(r#"{"value": bool}  (true: Move with Text, the floating object's vertical position follows its paragraph; false: Fix Position on Page. It stays where it is)"#)
             .when(|s| has_placeable(s).or_else(|| has_floating(s))),
+        CommandSpec::new("arrange.lockAnchor", "Lock Anchor", "Layout › Arrange › Position", |s, v| lock_anchor(s, p::bool(v, "value")))
+            .params(r#"{"value"?: bool}  (true: the floating object stays anchored to its paragraph when dragged, only its offsets change; false: dragging anchors it to the paragraph where it is dropped; omitted: toggle)"#)
+            .when(has_floating),
         CommandSpec::new("arrange.position", "Position", "Layout › Arrange", |s, v| {
             let preset = p::str(v, "preset").unwrap_or("middleCenter").to_string();
             let (x, y) = (p::f32(v, "x"), p::f32(v, "y"));

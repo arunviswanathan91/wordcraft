@@ -17,20 +17,23 @@ pub(crate) const WRAP_STYLES: [(&str, wordcraft_doc::para::Wrap, &str); 7] = {
 };
 
 /// The Wrap Text menu for the selected picture, shape or text box: the seven styles (the
-/// current one checked), then Move with Text / Fix Position on Page for a floating one. The
-/// canvas context menu shows it; the ribbon's Wrap Text button can share it.
+/// current one checked), then Move with Text / Fix Position on Page and Lock Anchor for a
+/// floating one. The canvas context menu shows it; the ribbon's Wrap Text button can share it.
 pub(crate) fn wrap_text_items(ui: &mut Ui, app: &mut WordApp) {
     use wordcraft_engine::cmd::objects::{moves_with_text, selected};
-    let state = selected(&app.session).and_then(|(_, o)| o.frame().map(|(_, _, f)| (f.wrap, moves_with_text(f))));
-    let wrap = state.map(|(w, _)| w);
+    let state = selected(&app.session).and_then(|(_, o)| o.frame().map(|(_, _, f)| (f.wrap, moves_with_text(f), f.locked)));
+    let wrap = state.map(|(w, _, _)| w);
     for (label, w, v) in WRAP_STYLES {
         mi_check(ui, app, label, wrap == Some(w), "arrange.wrap", json!({"wrap": v}));
     }
     ui.separator();
-    // An inline object is neither: it's part of the text.
-    let with_text = state.filter(|(w, _)| *w != wordcraft_doc::para::Wrap::Inline).map(|(_, m)| m);
+    // An inline object is none of these: it's part of the text.
+    let floating = state.filter(|(w, _, _)| *w != wordcraft_doc::para::Wrap::Inline);
+    let with_text = floating.map(|(_, m, _)| m);
     mi_check(ui, app, "Move with Text", with_text == Some(true), "arrange.moveWithText", json!({"value": true}));
     mi_check(ui, app, "Fix Position on Page", with_text == Some(false), "arrange.moveWithText", json!({"value": false}));
+    let locked = floating.is_some_and(|(_, _, l)| l);
+    mi_check(ui, app, "Lock Anchor", locked, "arrange.lockAnchor", json!({"value": !locked}));
 }
 
 /// Arrange › Rotate: turn 90° either way or flip (the angle and mirroring, not the pixels).
