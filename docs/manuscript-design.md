@@ -5,7 +5,8 @@
 > several are edited in one window as a continuous stack, and compile joins them into one DOCX,
 > PDF or LaTeX file, or into chosen parts such as the front pages or each chapter. Page
 > numbering, placement of the cover, contents and index, and thesis templates are set in the
-> binder. Open questions at the end need a maintainer decision before work starts.
+> binder. Heading numbers (3, 3.2, 3.2.1) come from levels, are checked and repaired, and typed
+> numbers in imported documents are detected and converted. Open questions at the end need a maintainer decision before work starts.
 
 ## Why
 
@@ -46,8 +47,10 @@ What it lacks is the project layer around all this. This document designs that l
    or LaTeX. It works the same in the app, the CLI and over MCP.
 6. **Numbering, cross-references and citations that span sections** come out right in the
    compiled document.
-7. **Snapshots.** Saved versions of a section that can be compared and restored.
-8. **Never lose work.** Same rules as the rest of WordCraft: no panics, hostile input is bounded,
+7. **Numbers that track themselves.** Heading numbers come from levels, problems are found and
+   repaired, and typed numbers in imported documents are converted to real numbering.
+8. **Snapshots.** Saved versions of a section that can be compared and restored.
+9. **Never lose work.** Same rules as the rest of WordCraft: no panics, hostile input is bounded,
    and a damaged project file never stops the sections from opening.
 
 ## Non-goals (for the first version)
@@ -193,7 +196,7 @@ numbering = { zone = "front" }
 [[preset]]
 name = "University submission"
 template = "templates/university.dotx"
-output = "pdf"                 # pdf | docx | odt | latex
+output = "pdf"                 # pdf | docx | odt | latex | html | markdown
 title_page = "s0003"           # an item to place first, or omitted
 separator = "section-break"    # between top-level folders: section-break | page-break | none
 section_separator = "none"     # between sections inside a folder
@@ -264,6 +267,8 @@ Everything is a command, as elsewhere in WordCraft. Programmatic calls never ope
 | `project.updateStyles` | `{"template"?}` | Run `tools.updateStyles` on every section |
 | `project.saveAsTemplate` | `{"path"}` | Write the project's structure, presets, template and starter sections as a project template |
 | `project.setMetadata` | `{"key", "value"}` | Title, author, degree…; shown on the front pages through `DOCPROPERTY` fields |
+| `project.refreshReferences` | `{"ids"?}` | Write the last compile's cross-section reference results back into section files |
+| `numbering.check`, `numbering.repair`, `numbering.detect` | `{"fix"?, "ids"?}` | Engine commands for any document; see [Heading and list numbering](#heading-and-list-numbering) |
 | `project.find`, `project.replace` | as `edit.find` / `edit.replace` | Across every included section; results name the section |
 | `binder.add` | `{"parent"?, "after"?, "kind", "title"}` | New item; a section gets an empty `.docx` made from the default preset's template |
 | `binder.import` | `{"path", "parent"?, "split"?: "none"\|"heading1"\|"heading2"}` | Bring in an existing document, optionally split at headings into one section each |
@@ -341,9 +346,12 @@ compile has to handle the following. Each was checked in the code.
    footers but keeps margins, paper size and page numbering.
    - A section file with no section break of its own carries no page setup, and follows the
      template.
-   - A section file with internal breaks (a landscape table page, say) keeps them, which is
-     usually intended. Compile reports each one as a note, so a stray break with the wrong
-     margins is visible.
+   - A section file with internal breaks (a landscape table page, say) keeps them by default,
+     which is usually intended. Compile reports each one as a note, so a stray break with the
+     wrong margins is visible.
+   - `section_setup = "template"` in the preset resets their margins, paper size and header
+     distances to the template's, keeping only orientation. Use it when sections come from
+     documents with stray layouts.
 5. **Captions numbered continuously.**
    - A section whose captions have no chapter part (`SEQ Figure \* ARABIC`) comes out as
      Figure 14, not Figure 3.2.
@@ -394,11 +402,15 @@ If chapter 3 refers to a figure in chapter 2, no section file can hold both ends
 - **Missing targets:** compile reports every `REF` whose bookmark doesn't exist in the compiled
   document as a warning naming the section.
 - **Opened alone in Word**, an update of fields (including the one Word runs before printing)
-  replaces such a field's text with Word's "reference not found" error. Two defences:
-  - `binder.exportForReview` locks these fields (see
-    [Supervisor round trip](#supervisor-round-trip)).
-  - WordCraft never updates a `_wcp_` field whose target isn't present. It keeps the last result
-    instead.
+  would replace such a field's text with Word's "reference not found" error. So:
+  - **Every save of a section locks its `_wcp_` fields** (`w:fldLock`, which WordCraft already
+    reads and writes, `crates/docx/src/write/story/field.rs:94`). A section file opened directly
+    in Word keeps its cached text ("Figure 2.4") through Update Fields and printing.
+  - WordCraft itself never updates a `_wcp_` field whose target isn't in the same document.
+  - **Compile** unlocks them in memory before updating fields.
+  - **`project.refreshReferences`** puts the fresh results from the last compile back into the
+    section files, so the cached text in each file is current. Sections open in the editor are
+    updated there instead, as an undoable edit. Compile itself still never writes a section file.
 
 ### Numbering across sections
 
@@ -635,8 +647,12 @@ first (milestone 0).
   - After placing a dragged picture, `move_object_once` always sets its position relative to the
     column and paragraph (`crates/engine/src/cmd/objects/arrange.rs:201-203`).
   - So a picture set to Fix Position on Page becomes Move with Text after any drag.
-  - Word's behaviour should be observed and confirmed first. The expected fix: keep a page- or
-    margin-relative position page-relative after a drag.
+  - Word is reported to keep Fix Position on Page after a drag, recalculating the offset in the
+    same frame (`page` or `margin`). That still has to be observed directly, following the clean
+    room rules, before the fix lands.
+  - The fix: a drag keeps the float's existing `h_rel` and `v_rel` and computes the new `x` and
+    `y` in that frame. It changes the anchor paragraph only when the picture isn't locked, and
+    draws the anchor marker while dragging.
 - **Captions don't stay with their pictures.**
   - `references.caption` doesn't set Keep with Next on the picture's paragraph (or Keep with Next
     on the caption, for a caption above).
@@ -647,6 +663,144 @@ first (milestone 0).
     and a caption text box is possible but leaves the caption outside the table of figures in some
     readers, so it isn't the default.
 
+## Heading and list numbering
+
+Numbering is the other long-standing complaint about long Word documents. Numbers like 3, 3.2
+and 3.2.1 go wrong in several ways, and Word mostly doesn't say so:
+
+- **Typed numbers aren't tracked.** A heading typed as "3.2.1 Methods" is plain text. Insert a
+  section before it, or move it, and the number is simply wrong. Documents imported from PDF,
+  Google Docs, older Word files or other people's templates often have numbers typed like this.
+- **Real numbering silently splits into several lists.** Pasting a heading from another document,
+  or applying numbering with the button instead of through the heading style, gives that
+  paragraph a different list. It then restarts at 1, or continues the wrong sequence
+  (2.1 after 3.4).
+- **Restarts and "Set Numbering Value" stay hidden.** A restart set by mistake months ago is
+  invisible until the numbers look wrong.
+- **Skipped levels.** A Heading 3 directly under a Heading 1 shows as 1.0.1.
+- **Double numbers.** A heading with both list numbering and a typed number shows "3.2 3.2
+  Methods".
+- **References go stale.** Typed "see Section 3.2" never changes. A cross-reference field changes
+  only when fields are updated.
+- **Separate files can't count on.** A chapter kept in its own file starts at 1 when opened alone.
+
+### What WordCraft already has
+
+Checked in the code:
+- **Heading-linked multilevel lists.** `list.multilevelPreset` with `headings` (1 / 1.1 / 1.1.1),
+  `article`, `outlineHeadings` and `chapter` links levels 1–9 to Heading 1–9. A new heading is
+  numbered by its style alone (`docs/typing-parity.md`, tests in
+  `crates/engine/src/tests/typing.rs`).
+- **List controls:** `para.restartNumbering`, `para.setNumberingValue`, `para.listLevel`,
+  `para.defineNumber`, and legal-style numbering (`legal` in `crates/doc/src/numbering.rs`).
+- **Per-level start overrides on a list** (`Num::start_overrides`): one list can start its first
+  level at 3 without a second list.
+- **Cross-references** to headings, figures, tables and equations, showing text, page or number
+  (`insert.crossReference`, `show: "number"`).
+- **Outline commands** to promote, demote and move headings with their content (`outline.*`).
+- **Not there yet:** nothing detects typed numbers, and nothing reports the problems above. The
+  AutoFormat rule for `1. ` at the start of a paragraph works only while typing.
+
+### The rule: one scheme, numbers come from levels
+
+- **A project has one numbering scheme**, from its template. It is a heading-linked multilevel
+  list: level formats (`1`, `1.1`, `1.1.1`, or `Chapter 1`, `A.1` for appendices), linked to
+  Heading 1–9.
+- **A heading's number comes only from its level and position.** Writers never type numbers; they
+  choose a level (Heading 2, or promote/demote with the existing outline keys), and the number
+  follows. Moving a section in the binder, or a heading in outline view, renumbers everything.
+- **Appendices switch format, not lists.** The `appendix` numbering zone (see
+  [Page numbering zones](#page-numbering-zones)) switches level 1 to letters in the compiled
+  document, so Appendix A, A.1, A.2 follow without a second list.
+- **Body lists stay separate.** Numbered lists in the text (1, 2, 3 / a, b, c) are their own lists
+  and never continue across sections.
+
+### Numbering check and repair
+
+`numbering.check` lists every problem with its location, in a task pane like the spelling pane.
+`numbering.repair` fixes one item or all of them, as one undo step each, and reports exactly what
+changed. Both work on any document, not only in projects, so they belong in the engine
+(`crates/engine/src/cmd/lists.rs` or a new `cmd/numbering.rs`).
+
+| Problem found | Repair offered |
+|---|---|
+| A heading on a different list from the scheme (pasted or button-numbered) | Move it to the scheme's list at its level |
+| A restart or numbering value on a heading | Remove it, or keep it (marked as intended, so it isn't reported again) |
+| A skipped level (Heading 3 under Heading 1, shown 1.0.1) | Promote it, or insert the missing level, or keep it |
+| A typed number in front of a numbered heading ("3.2 3.2 Methods") | Delete the typed number |
+| A heading with a typed number and no list numbering | Convert (see [Detecting typed numbers](#detecting-typed-numbers)) |
+| Typed references ("see Section 3.2", "Figure 4.1") matching a heading or caption | Turn into a cross-reference field to it |
+| A cross-reference field whose shown number differs from its target's current number | Update it |
+| A cross-reference to a heading that no longer exists | Report only |
+
+"Marked as intended" is stored as a document variable, so it survives saving and opening in
+Word.
+
+### Detecting typed numbers
+
+`numbering.detect` finds paragraphs that start with a typed number and proposes real numbering.
+It is offered automatically when a document is opened or imported into a project
+(`binder.import`), and never applied without the writer confirming.
+
+1. **Patterns** at the start of a paragraph:
+   - decimal `3`, `3.2`, `3.2.1` (with or without a final full stop or bracket);
+   - `Chapter 3`, `Section 3.2`, `Part II`, `Appendix A`, `A.1`;
+   - roman `I.`, `II.`, letters `A.`, `(a)`, `a)`.
+   - Patterns are a fixed list, and each one is matched once per paragraph start, over a bounded
+     number of characters.
+2. **Level** comes from the number of parts: `3.2.1` is level 3.
+3. **Confidence** comes from three things:
+   - **Sequence:** the numbers found form a sequence (3.1 after 3, 3.2 after 3.1). A jump or
+     repeat lowers confidence and is shown, since it is usually a numbering mistake in the
+     source.
+   - **Looks like a heading:** short, one line, bold or larger, followed by body text, or already
+     in a heading style.
+   - **Not a list or a table:** numbers in table cells, and runs of short numbered lines in body
+     text, are treated as body lists, not headings.
+4. **Proposal:** a table of every candidate (number, text, proposed level, confidence) where the
+   writer can untick lines or change a level.
+5. **Convert:**
+   - remove the typed number and the space after it;
+   - apply Heading *n* (or the scheme's style for that level);
+   - put the paragraph on the scheme's list.
+   - If the first number isn't 1, as in a chapter file starting at "3.1", set a start override so
+     the numbers stay what they were (see the next section).
+   - Typed references to the converted headings are then offered as cross-references (the
+     check's last rows).
+6. **Body lists** found the same way (`1)`, `a.`, `(i)` at the start of consecutive paragraphs)
+   are offered as real numbered lists.
+
+### Numbers across separate section files
+
+Each section is its own document, so chapter 3's file has to know it is chapter 3:
+
+- **In the stack and the binder**, heading numbers start after the counts cached for earlier
+  sections (heading counts per level are in the cache, like caption counts).
+- **In the section file**, `binder.move`, `binder.add` and `binder.delete` set the scheme list's
+  level-1 start override (`Num::start_overrides`) in each affected section. That is one small
+  change to each file whose position changed, done after taking care of open sections like any
+  other edit.
+  - So a supervisor opening `s0005.docx` in Word also sees 3, 3.1, 3.2.
+  - This is the only time WordCraft changes a section file for the writer. It can be turned off
+    per project (`sync_numbering = false`).
+- **In the compiled document**, compile drops those start overrides and maps every heading to the
+  template's list, so numbering simply runs through.
+- **Cross-chapter references** to heading numbers work like the other cross-section references
+  (project-scoped bookmarks, locked in section files; see
+  [Cross-references between sections](#cross-references-between-sections)).
+
+### Adding numbering fast
+
+- **Typing a number creates a numbered heading** (projects only, off in Word-parity mode): `3.2 `
+  followed by a space at the start of an empty paragraph applies the scheme's level 2 heading.
+  The typed number is removed, and the paragraph shows the number its position gives. If that
+  number isn't what was typed, the status bar shows the actual number. This extends the existing
+  `1. ` AutoFormat rule and is pinned in `crates/engine/src/tests/typing.rs`.
+- **Level keys:** the existing promote and demote keys (`outline.promote`, `outline.demote`) work
+  on headings outside outline view too.
+- **The binder shows numbers.** Items show their heading numbers from the cache (`3  Methods`,
+  `3.2  Sampling`), so reordering in the binder shows the new numbers at once.
+
 ## Supervisor round trip
 
 Section files open in Word, so a supervisor can review a chapter directly. Two commands make that
@@ -656,12 +810,11 @@ safe and simple:
   1. Takes a snapshot labelled "Sent for review".
   2. Writes a copy with a readable name (for example `04-Results.docx`, from the binder position
      and title).
-  3. Locks the `_wcp_` cross-section reference fields in the copy (`w:fldLock`, which WordCraft
-     already reads and writes, `crates/docx/src/write/story/field.rs:94`). Word then leaves their
-     text alone when updating fields or printing.
+  3. Runs `project.refreshReferences` for that section first, so its locked cross-section
+     references show current numbers.
 - **`binder.importReviewed {"id", "path"}`**
   1. Takes a snapshot of the current section.
-  2. Opens the reviewed file and unlocks the fields the export locked.
+  2. Opens the reviewed file. Its `_wcp_` fields are still locked, as in every section file.
   3. Compares it with the snapshot taken at export (`review.compare`). The supervisor's tracked
      changes and comments, and any untracked edits as tracked differences, show in the section
      for the writer to accept or reject.
@@ -763,6 +916,14 @@ before merging.
   - Each numbering rule written to DOCX and read back.
 - **Export sets:** `per-item` output names. A chapter exported `as-in-full` starts at its page
   and figure numbers in the full document.
+- **Numbering:**
+  - Each problem in the check's table: found, repaired, and left alone once marked as intended.
+  - Detection: a document of typed headings (3, 3.1, 3.1.1, a jump to 3.3, a numbered table and a
+    numbered body list) is converted with the right levels; the table and list aren't headings;
+    a chapter file starting at 3.1 keeps its numbers.
+  - Hostile: 100,000 paragraphs starting with digits; numbers with thousands of parts.
+  - Start sync: moving a chapter in the binder renumbers the files after it, and the compiled
+    document numbers continuously.
 - **Figures:** Lock Anchor round-trips through DOCX. A locked picture keeps its anchor when
   dragged. A Fix Position on Page picture stays page-relative after a drag. Insert Caption sets
   Keep with Next.
@@ -790,8 +951,9 @@ described here.
 
 | # | Scope | Estimate |
 |---|---|---|
-| 0 | Engine fixes from [Figures](#engine-fixes-this-depends-on): Lock Anchor, the Fix Position on Page drag reset (after observing Word), Keep with Next on captions. Separate pull requests | 2–4 days |
-| 1 | `crates/manuscript`: project format, cache, binder commands, snapshots, CLI `project` subcommands, tests. No UI | 1–1.5 weeks |
+| 0 | Engine fixes from [Figures](#engine-fixes-this-depends-on): Lock Anchor, the Fix Position on Page drag reset (after observing Word), Keep with Next on captions, top and bottom of page placement presets. Separate pull requests | 3–5 days |
+| 0b | Numbering in the engine, for any document: `numbering.check`, `numbering.repair`, `numbering.detect` with their task pane (see [Heading and list numbering](#heading-and-list-numbering)) | 1.5–2 weeks |
+| 1 | `crates/manuscript`: project format, cache (with heading and caption counts), binder commands, numbering start sync, snapshots, CLI `project` subcommands, tests. No UI | 1–1.5 weeks |
 | 2 | Compile: pipeline, bookmark renaming, sources merge, heading-list mapping, per-chapter captions, figure normalisation, cross-section references, roles and generated items, page numbering zones (with the uncounted-page pass), checks, presets, fixtures | 2.5–3 weeks |
 | 3 | UI: stacked editor, binder sidebar, inspector, compile dialog, Project tab, targets | 2–3 weeks |
 | 4 | Project templates and metadata, export sets (split output, `as-in-full` numbering, PDF page ranges), corkboard, supervisor round trip, live caption offsets in the stack, web zip projects, import and split of a long `.docx` at headings | 2–3 weeks |
@@ -815,7 +977,9 @@ and compile a correctly numbered PDF, DOCX or LaTeX file.
 
 ## Open questions for maintainers
 
-Each has a recommendation; the decision is the maintainers'.
+Each has a recommendation. The owner of this fork has chosen the first and third: an in-app
+Project mode, with `.docx` section storage. For upstream WordCraft, the decision stays with its
+maintainers.
 
 1. **A mode in WordCraft, or a separate app?**
    - Recommended: a mode. A writer needs every WordCraft tool while editing a section.
@@ -835,6 +999,7 @@ Each has a recommendation; the decision is the maintainers'.
 
 | Date | Change |
 |---|---|
+| 2026-11-07 | Heading and list numbering: one scheme per project, check and repair of split lists, restarts, skipped levels, double and typed numbers, and stale references; detection of typed numbers on import; numbers kept across separate section files. Cross-section reference fields locked in every section file, with `project.refreshReferences`. `section_setup` preset option. HTML and Markdown outputs. Fork owner's choices recorded for the open questions |
 | 2026-11-07 | Structure, page numbering and templates: item roles (placing the cover, contents, index and others), page numbering zones (roman front matter, restarts, uncounted and hidden pages, odd-page starts) mapped to existing section properties, project templates with metadata, export sets (front pages or each chapter separately, numbers as in the full document) |
 | 2026-11-07 | Stacked view of separate section documents as the core of the design (speed, containing reflow). Corrections from review: LaTeX output exists; per-chapter captions; directly numbered headings; section breaks inside section files; pictures already stored once. Added figure presets and normalisation, engine fixes found in the code (Lock Anchor, the Fix Position on Page drag reset, caption Keep with Next), supervisor round trip, checks before submission, Zotero licensing notes, recommendations for the open questions |
 | 2026-11-07 | First draft |
