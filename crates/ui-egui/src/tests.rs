@@ -7590,7 +7590,9 @@ fn heading_numbering_pane_fixes_and_converts() {
     for _ in 0..4 {
         h.step();
     }
-    let text = |h: &egui_kittest::Harness<'_, WordApp>, k: usize| h.state().session.doc.body.get(k).and_then(|b| b.as_para()).map(|p| p.plain_text()).unwrap_or_default();
+    let text = |h: &egui_kittest::Harness<'_, WordApp>, k: usize| {
+        h.state().session.doc.body.get(k).and_then(|b| b.as_para()).map(|p| p.plain_text()).unwrap_or_default()
+    };
     assert_eq!(text(&h, 1), "Background");
     assert!(h.query_by_label_contains("No heading numbering problems found.").is_some());
     // "2 Methods" and "2.1 Sites" were typed: ticked, then numbered.
