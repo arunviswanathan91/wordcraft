@@ -50,6 +50,7 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
         "picture" => &[("Pictures", PICTURES)],
         "font" => &[("Fonts", wordcraft_fonts::FONT_FILE_EXTS)],
         "sources" => &[("Word sources", &["xml"]), ("All files", &["*"])],
+        "project" => &[("WordCraft project", &["toml"])],
         "recipients" => &[("Recipient lists", wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS), ("All files", &["*"])],
         _ => &[("Documents", DOCUMENTS), ("Word document", &["docx"]), ("All files", &["*"])],
     }
@@ -80,6 +81,12 @@ pub(crate) enum AfterPick {
     ForDialog,
     /// Put the picked document into the Compare dialog (original or revised, #412).
     ComparePath { revised: bool },
+    /// Make a manuscript project in the picked folder (thesis mode).
+    NewProject,
+    /// Open the manuscript project whose `project.toml` was picked (thesis mode).
+    OpenProject,
+    /// Compile the open manuscript project to the picked file (thesis mode).
+    CompileProject,
 }
 
 /// What to do once Save As has written the document.
@@ -248,6 +255,18 @@ impl WordApp {
                 let r = self.open_file(&path, Some(document));
                 self.ui.backstage = false;
                 r
+            }
+            AfterPick::NewProject => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                crate::project_ui::new_project(self, &path)
+            }
+            AfterPick::OpenProject => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                crate::project_ui::open_project(self, &path)
+            }
+            AfterPick::CompileProject => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                crate::project_ui::compile_to(self, &path, None)
             }
             AfterPick::Picture => {
                 let Some(path) = picked else {

@@ -7609,3 +7609,71 @@ fn heading_numbering_pane_fixes_and_converts() {
     assert_eq!(styles[3].as_deref(), Some("Heading2"));
     assert!(h.query_by_label_contains("Typed heading numbers").is_none(), "nothing typed is left");
 }
+
+/// Thesis mode: Project › New Project makes a project and opens its first section with the
+/// Binder beside it; a new section opens; switching sections in the binder saves the one being
+/// left; the Project tab's New Section adds one.
+#[test]
+fn thesis_mode_makes_a_project_and_moves_between_sections() {
+    use egui_kittest::kittest::Queryable;
+    let dir = std::env::temp_dir().join(format!("wc-thesis-ui-{}-{}", std::process::id(), wordcraft_engine::cmd::now_unix()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = dir.join("Ink and Iron.wcproj");
+    let mut a = app();
+    a.run("ui.project.new", json!({"path": root.to_string_lossy()})).unwrap();
+    let section = |a: &WordApp| crate::project_ui::current_section(a);
+    assert_eq!(section(&a).as_deref(), Some("s0001"), "the first section is open");
+    assert_eq!(a.project.as_ref().unwrap().info["title"], "Ink and Iron");
+    // A new section opens; what's typed in it is saved when moving back to the first.
+    a.run("ui.project.add", json!({"kind": "section"})).unwrap();
+    assert_eq!(section(&a).as_deref(), Some("s0002"));
+    a.run("text.insert", json!({"text": "Methods text"})).unwrap();
+    a.run("ui.project.openItem", json!({"id": "s0001"})).unwrap();
+    assert_eq!(section(&a).as_deref(), Some("s0001"));
+    let saved = wordcraft_engine::io::open_path(&root.join("sections/s0002.docx")).unwrap();
+    assert_eq!(saved.plain_text(wordcraft_doc::StoryRef::Body).trim(), "Methods text", "the section left was saved");
+    // The Binder and the Project tab are shown.
+    a.ui_command("ui.tab", &json!({"tab": "Project"})).unwrap().unwrap();
+    let mut h = harness(a);
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(h.query_by_label_contains("Ink and Iron").is_some(), "the binder shows the project");
+    assert!(h.query_by_label_contains("Untitled").is_some(), "and its sections");
+    assert!(h.query_by_label("Project").is_some(), "the Project tab is there");
+    // The ribbon's New Section runs this (big ribbon buttons have no accessible name to click by).
+    h.state_mut().run("ui.project.add", json!({"kind": "section"})).unwrap();
+    for _ in 0..4 {
+        h.step();
+    }
+    let items = h.state().project.as_ref().unwrap().info["items"].as_array().unwrap().len();
+    assert_eq!(items, 3, "New Section added one");
+    assert_eq!(section(h.state()).as_deref(), Some("s0003"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Project › Compile to Word writes the joined manuscript, including what was just typed in
+/// the open section (saved first); Preview opens the compiled document beside the section.
+#[test]
+fn thesis_mode_compiles_and_previews() {
+    let dir = std::env::temp_dir().join(format!("wc-thesis-compile-{}-{}", std::process::id(), wordcraft_engine::cmd::now_unix()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = dir.join("Kilns.wcproj");
+    let mut a = app();
+    a.run("ui.project.new", json!({"path": root.to_string_lossy()})).unwrap();
+    a.run("text.insert", json!({"text": "Chapter one, not saved yet."})).unwrap();
+    a.run("ui.project.add", json!({"kind": "section"})).unwrap();
+    a.run("text.insert", json!({"text": "Chapter two."})).unwrap();
+    let out = dir.join("Kilns.docx");
+    let r = a.run("ui.project.compile", json!({"path": out.to_string_lossy()})).unwrap();
+    assert_eq!(r["sections"].as_array().map(Vec::len), Some(2), "{r}");
+    let doc = wordcraft_engine::io::open_path(&out).unwrap();
+    let text = doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text.contains("Chapter one, not saved yet.") && text.contains("Chapter two."), "{text}");
+    let section = a.session.document_id();
+    a.run("ui.project.preview", json!({})).unwrap();
+    assert_ne!(a.session.document_id(), section, "the preview is a document of its own");
+    assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Chapter two."));
+    assert!(crate::project_ui::current_section(&a).is_none(), "the preview isn't a section");
+    let _ = std::fs::remove_dir_all(&dir);
+}

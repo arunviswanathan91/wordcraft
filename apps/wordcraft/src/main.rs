@@ -365,7 +365,7 @@ const USAGE: &str = "\
 wordcraft — the WordCraft desktop app
 
 USAGE:
-  wordcraft [--sample] [--control PORT] [FILE…]
+  wordcraft [--sample] [--control PORT] [FILE…]   (a .wcproj project folder opens in thesis mode)
 
 OPTIONS:
   --sample            open the sample document
@@ -606,6 +606,13 @@ fn main() -> eframe::Result {
                 app.start_screen();
             }
             for f in files {
+                // A manuscript project (its folder or project.toml) opens in thesis mode.
+                if wordcraft_ui_egui::project_ui::is_project_path(&f) {
+                    if let Err(e) = app.run("ui.project.open", serde_json::json!({"path": f})) {
+                        app.report_open_failure(&f, &e);
+                    }
+                    continue;
+                }
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
                     app.report_open_failure(&f, &e);
                 }

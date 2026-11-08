@@ -51,6 +51,7 @@ pub fn open(app: &WordApp) -> Vec<Pane> {
         (Pane::Proofing, app.spelling_review.is_some()),
         (Pane::Comments, v.comments_pane),
         (Pane::Numbering, v.numbering_pane),
+        (Pane::Binder, app.project.as_ref().is_some_and(|p| p.binder)),
     ]
     .into_iter()
     .filter_map(|(pane, shown)| shown.then_some(pane))

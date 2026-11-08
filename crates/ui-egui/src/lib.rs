@@ -63,6 +63,7 @@ pub mod paste_picture;
 pub mod previews;
 pub mod print_page;
 pub mod printing;
+pub mod project_ui;
 pub mod proofing_pane;
 pub mod read_aloud;
 pub mod ribbon;
@@ -749,6 +750,8 @@ pub struct WordApp {
     pub(crate) outline_prev_tab: Option<String>,
     /// Zotero commands in flight (`ui.zotero.*`).
     pub zotero: zotero::ZoteroLink,
+    /// The manuscript project open in the window (thesis mode: the Project tab and the Binder).
+    pub project: Option<project_ui::ProjectUi>,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
     /// Whether the current command was entered by an input method's own transaction. The engine
