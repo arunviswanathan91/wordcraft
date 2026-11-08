@@ -15,6 +15,11 @@ pub(super) fn project(app: &mut WordApp, ui: &mut Ui) {
         let shown = app.project.as_ref().is_some_and(|p| p.binder);
         crate::widgets::big_toggle(ui, app, "navPane", "Binder", "ui.project.binder", shown);
     });
+    group(ui, "Compile", None, app, |ui, app| {
+        big(ui, app, "preview", "Preview", "ui.project.preview", json!({}), false);
+        big(ui, app, "finish", "Compile to\nPDF", "ui.project.compile", json!({"format": "pdf"}), false);
+        big(ui, app, "documentTemplate", "Compile to\nWord", "ui.project.compile", json!({"format": "docx"}), false);
+    });
     group(ui, "Versions", None, app, |ui, app| {
         big(ui, app, "screenshot", "Take\nSnapshot", "ui.project.snapshot", json!({}), false);
     });

@@ -212,12 +212,69 @@ pub(crate) fn command(app: &mut WordApp, id: &str, params: &Value) -> Option<Res
                 None => Err(tl!("Pick a section to take a snapshot of.").into()),
             }
         }
+        "ui.project.preview" => {
+            save_open_section(app);
+            let r = project_run(app, "compile.preview", json!({"preset": params.get("preset")}));
+            app.sync_document();
+            report(app, r)
+        }
+        "ui.project.compile" => {
+            let format = params
+                .get("format")
+                .and_then(Value::as_str)
+                .filter(|f| f.chars().all(|c| c.is_ascii_alphanumeric()) && !f.is_empty())
+                .unwrap_or("pdf")
+                .to_string();
+            match path {
+                Some(p) => compile_to(app, &p, params.get("preset").cloned()),
+                None => {
+                    let title = app
+                        .project
+                        .as_ref()
+                        .and_then(|p| p.info["title"].as_str().map(str::to_string))
+                        .unwrap_or_else(|| tl!("Manuscript").to_string());
+                    asked(app.ask_file(FileDialogRequest::Save { name: format!("{title}.{format}"), dir: None }, AfterPick::CompileProject))
+                }
+            }
+        }
         "ui.project.openItem" => match params.get("id").and_then(Value::as_str) {
             Some(sid) => open_section(app, sid),
             None => Err("`id` is required".into()),
         },
         _ => Err(format!("unknown command {id}")),
     })
+}
+
+/// Save the section open in the window when it has changes, so compiling reads what's there.
+fn save_open_section(app: &mut WordApp) {
+    if current_section(app).is_some() && app.document_unsaved() {
+        let _ = app.run("file.save", json!({}));
+    }
+}
+
+/// Compile the open project to `path` (its extension picks the format).
+pub(crate) fn compile_to(app: &mut WordApp, path: &str, preset: Option<Value>) -> Result<Value, String> {
+    save_open_section(app);
+    let r = project_run(app, "compile.run", json!({"path": path, "preset": preset}));
+    report(app, r)
+}
+
+/// Say how a compile went: on the status line, and its warnings in the Binder.
+fn report(app: &mut WordApp, r: Result<Value, String>) -> Result<Value, String> {
+    if let Ok(v) = &r {
+        let n = v["sections"].as_array().map_or(0, Vec::len);
+        let warnings: Vec<String> =
+            v["warnings"].as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+        let msg = match v["path"].as_str() {
+            Some(p) => crate::i18n::fmt(tl!("Compiled {n} sections to {path}"), &[("n", &n.to_string()), ("path", p)]),
+            None => crate::i18n::fmt(tl!("Compiled {n} sections"), &[("n", &n.to_string())]),
+        };
+        app.status(msg);
+        if let Some(p) = app.project.as_mut() {
+            p.error = (!warnings.is_empty()).then(|| warnings.join("\n"));
+        }
+    }
+    r
 }
 
 fn asked(a: Asked) -> Result<Value, String> {

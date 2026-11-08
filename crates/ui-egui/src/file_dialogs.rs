@@ -85,6 +85,8 @@ pub(crate) enum AfterPick {
     NewProject,
     /// Open the manuscript project whose `project.toml` was picked (thesis mode).
     OpenProject,
+    /// Compile the open manuscript project to the picked file (thesis mode).
+    CompileProject,
 }
 
 /// What to do once Save As has written the document.
@@ -261,6 +263,10 @@ impl WordApp {
             AfterPick::OpenProject => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 crate::project_ui::open_project(self, &path)
+            }
+            AfterPick::CompileProject => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                crate::project_ui::compile_to(self, &path, None)
             }
             AfterPick::Picture => {
                 let Some(path) = picked else {

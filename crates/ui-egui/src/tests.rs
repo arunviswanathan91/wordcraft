@@ -7649,3 +7649,29 @@ fn thesis_mode_makes_a_project_and_moves_between_sections() {
     assert_eq!(section(h.state()).as_deref(), Some("s0003"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Project › Compile to Word writes the joined manuscript, including what was just typed in
+/// the open section (saved first); Preview opens the compiled document beside the section.
+#[test]
+fn thesis_mode_compiles_and_previews() {
+    let dir = std::env::temp_dir().join(format!("wc-thesis-compile-{}-{}", std::process::id(), wordcraft_engine::cmd::now_unix()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = dir.join("Kilns.wcproj");
+    let mut a = app();
+    a.run("ui.project.new", json!({"path": root.to_string_lossy()})).unwrap();
+    a.run("text.insert", json!({"text": "Chapter one, not saved yet."})).unwrap();
+    a.run("ui.project.add", json!({"kind": "section"})).unwrap();
+    a.run("text.insert", json!({"text": "Chapter two."})).unwrap();
+    let out = dir.join("Kilns.docx");
+    let r = a.run("ui.project.compile", json!({"path": out.to_string_lossy()})).unwrap();
+    assert_eq!(r["sections"].as_array().map(Vec::len), Some(2), "{r}");
+    let doc = wordcraft_engine::io::open_path(&out).unwrap();
+    let text = doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text.contains("Chapter one, not saved yet.") && text.contains("Chapter two."), "{text}");
+    let section = a.session.document_id();
+    a.run("ui.project.preview", json!({})).unwrap();
+    assert_ne!(a.session.document_id(), section, "the preview is a document of its own");
+    assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Chapter two."));
+    assert!(crate::project_ui::current_section(&a).is_none(), "the preview isn't a section");
+    let _ = std::fs::remove_dir_all(&dir);
+}

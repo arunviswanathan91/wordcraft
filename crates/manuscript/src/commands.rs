@@ -44,6 +44,18 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("binder.openItem", "Open Binder Item", LOC, open_item)
             .params(r#"{"project": folder, "id": section id}: opens the section's document, as File › Open does"#),
+        CommandSpec::new("compile.presets", "Compile Presets", LOC, |_, v| {
+            let pr = open(v)?;
+            let list = crate::compile::presets(&pr).map_err(fail)?;
+            Ok(json!({"presets": list.iter().map(|p| json!({"name": p.name, "output": p.output, "template": p.template})).collect::<Vec<_>>()}))
+        })
+        .params(r#"{"project": folder} → {"presets": [{"name", "output", "template"}]} (a Default preset when the project has none)"#)
+        .pure(),
+        CommandSpec::new("compile.run", "Compile", LOC, compile_run)
+            .params(r#"{"project": folder, "path": file to write (its extension picks the format: pdf, docx, odt, rtf, html, md, tex, txt; none: the preset's output), "preset"?: name (default the first)} → {"path", "sections", "words", "warnings"}: the included sections in binder order, joined with the preset's template and separators, fields, tables of contents and heading numbers updated. Section files are not changed"#)
+            .pure(),
+        CommandSpec::new("compile.preview", "Compile Preview", LOC, compile_preview)
+            .params(r#"{"project": folder, "preset"?: name} → {"document": id, "sections", "words", "warnings"}: compiles into a new unsaved document beside the open ones and shows it"#),
         CommandSpec::new("snapshot.take", "Take Snapshot", LOC, |_, v| {
             let pr = open(v)?;
             let id = section_id(&pr, v)?;
@@ -330,4 +342,29 @@ fn open_item(s: &mut Session, v: &Value) -> CmdResult {
     let id = section_id(&pr, v)?;
     let path = pr.section_path(&id).map_err(fail)?;
     s.run("file.open", &json!({"path": path.to_string_lossy()}))
+}
+
+fn compile_run(_: &mut Session, v: &Value) -> CmdResult {
+    let pr = open(v)?;
+    let preset = crate::compile::preset(&pr, p::str(v, "preset")).map_err(fail)?;
+    let path = p::req_str(v, "path")?;
+    if path.trim().is_empty() {
+        return Err(CmdError::Params("`path` is empty".into()));
+    }
+    let path = if Path::new(path).extension().is_some() { path.to_string() } else { format!("{path}.{}", preset.output) };
+    let c = crate::compile::compile(&pr, &preset).map_err(fail)?;
+    wordcraft_engine::io::save_path(Path::new(&path), &c.doc).map_err(fail)?;
+    Ok(crate::compile::summary(&c, json!({"path": path, "preset": preset.name})))
+}
+
+fn compile_preview(s: &mut Session, v: &Value) -> CmdResult {
+    let pr = open(v)?;
+    let preset = crate::compile::preset(&pr, p::str(v, "preset")).map_err(fail)?;
+    let c = crate::compile::compile(&pr, &preset).map_err(fail)?;
+    let summary = crate::compile::summary(&c, json!({"preset": preset.name}));
+    let id = s.add_document(c.doc);
+    s.activate(id)?;
+    let mut summary = summary;
+    summary["document"] = json!(id);
+    Ok(summary)
 }
