@@ -27,13 +27,13 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"project": folder, "title"?: string, "author"?: string, "projectWords"?: n | null, "sessionWords"?: n | null, "deadline"?: "YYYY-MM-DD" | null}"#)
             .pure(),
         CommandSpec::new("binder.add", "New Binder Item", LOC, add)
-            .params(r#"{"project": folder, "kind"?: "section|folder" (default section), "title"?: string, "parent"?: folder id (default the top level), "index"?: n (default last)} → {"id"}: a section gets an empty document"#)
+            .params(r#"{"project": folder, "kind"?: "section|folder" (default section), "title"?: string, "parent"?: folder id (default the top level), "index"?: n (default last), "role"?: string (contents, figures, tables, equations, bibliography or index: compile puts that generated list there)} → {"id"}: a section gets an empty document"#)
             .pure(),
         CommandSpec::new("binder.move", "Move Binder Item", LOC, move_item)
             .params(r#"{"project": folder, "id", "parent"?: folder id | null (the top level), "index"?: n (default last)}"#)
             .pure(),
         CommandSpec::new("binder.setMeta", "Binder Item Properties", LOC, set_meta)
-            .params(r#"{"project": folder, "id", "title"?, "synopsis"?, "label"?, "status"?, "role"?: string, "target"?: words | null, "include"?: bool}"#)
+            .params(r#"{"project": folder, "id", "title"?, "synopsis"?, "label"?, "status"?, "role"?: string, "target"?: words | null, "include"?: bool, "numbering"?: {"zone"?: "continue|front|main|appendix|none", "show"?: "all|not-first|none", "startOn"?: "next|odd|even"} | null (how its pages are numbered when compiled; what a folder holds inherits it)}"#)
             .pure(),
         CommandSpec::new("binder.rename", "Rename Binder Item", LOC, set_meta).params(r#"{"project": folder, "id", "title": string}"#).pure(),
         CommandSpec::new("binder.delete", "Delete Binder Item", LOC, delete)
@@ -54,6 +54,14 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("compile.run", "Compile", LOC, compile_run)
             .params(r#"{"project": folder, "path": file to write (its extension picks the format: pdf, docx, odt, rtf, html, md, tex, txt; none: the preset's output), "preset"?: name (default the first)} → {"path", "sections", "words", "warnings"}: the included sections in binder order, joined with the preset's template and separators, fields, tables of contents and heading numbers updated. Section files are not changed"#)
             .pure(),
+        CommandSpec::new("compile.check", "Check Before Submitting", LOC, |_, v| {
+            let pr = open(v)?;
+            let preset = crate::compile::preset(&pr, p::str(v, "preset")).map_err(fail)?;
+            let c = crate::compile::compile(&pr, &preset).map_err(fail)?;
+            Ok(crate::compile::check(&c, &preset))
+        })
+        .params(r#"{"project": folder, "preset"?: name} → {"ok": false when the preset is final and comments, tracked changes or markers (TODO, [CITE]…) are left, "problems": [{"kind", "message", "error"}], "sections", "words"}: compiles in memory and writes nothing"#)
+        .pure(),
         CommandSpec::new("compile.preview", "Compile Preview", LOC, compile_preview)
             .params(r#"{"project": folder, "preset"?: name} → {"document": id, "sections", "words", "warnings"}: compiles into a new unsaved document beside the open ones and shows it"#),
         CommandSpec::new("snapshot.take", "Take Snapshot", LOC, |_, v| {
@@ -265,7 +273,11 @@ fn add(_: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Failed("the binder is full".into()));
     }
     let id = pr.file.new_id().map_err(fail)?;
-    binder::insert(&mut pr.file.items, parent.as_deref(), index, Item::new(id.clone(), kind, title)).map_err(fail)?;
+    let mut item = Item::new(id.clone(), kind, title);
+    if let Some(role) = text(v, "role")? {
+        item.role = role;
+    }
+    binder::insert(&mut pr.file.items, parent.as_deref(), index, item).map_err(fail)?;
     // The file first: a binder entry never points at a file that wasn't made.
     if kind == Kind::Section {
         new_section_file(&pr, &id)?;
@@ -296,7 +308,11 @@ fn set_meta(_: &mut Session, v: &Value) -> CmdResult {
         None => None,
         Some(b) => Some(b.as_bool().ok_or_else(|| CmdError::Params("`include` is true or false".into()))?),
     };
+    let numbering = numbering_rule(v)?;
     let item = binder::find_mut(&mut pr.file.items, &id).ok_or_else(|| CmdError::Params(format!("no item {id:?}")))?;
+    if let Some(n) = numbering {
+        item.numbering = n;
+    }
     for (field, value) in
         [(&mut item.title, title), (&mut item.synopsis, synopsis), (&mut item.label, label), (&mut item.status, status), (&mut item.role, role)]
     {
@@ -312,6 +328,27 @@ fn set_meta(_: &mut Session, v: &Value) -> CmdResult {
     }
     pr.save().map_err(fail)?;
     Ok(json!({"id": id}))
+}
+
+/// `"numbering"`: absent (unchanged), null (cleared) or `{"zone"?, "show"?, "startOn"?}`, each
+/// checked as compile reads it.
+fn numbering_rule(v: &Value) -> Result<Option<Option<crate::project::NumberingRule>>, CmdError> {
+    let n = match v.get("numbering") {
+        None => return Ok(None),
+        Some(Value::Null) => return Ok(Some(None)),
+        Some(Value::Object(o)) => o,
+        Some(_) => return Err(CmdError::Params("`numbering` is {\"zone\", \"show\", \"startOn\"} or null".into())),
+    };
+    let get = |k: &str| -> Result<Option<String>, CmdError> {
+        match n.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(s)) => Ok(Some(s.chars().take(40).collect())),
+            Some(_) => Err(CmdError::Params(format!("`numbering.{k}` is text"))),
+        }
+    };
+    let rule = crate::project::NumberingRule { zone: get("zone")?, show: get("show")?, start_on: get("startOn")?, extra: toml::Table::new() };
+    crate::compile::Rule::default().with(&rule).map_err(CmdError::Params)?;
+    Ok(Some(Some(rule)))
 }
 
 fn delete(_: &mut Session, v: &Value) -> CmdResult {

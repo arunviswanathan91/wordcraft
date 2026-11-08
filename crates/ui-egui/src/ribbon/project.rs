@@ -16,6 +16,7 @@ pub(super) fn project(app: &mut WordApp, ui: &mut Ui) {
         crate::widgets::big_toggle(ui, app, "navPane", "Binder", "ui.project.binder", shown);
     });
     group(ui, "Compile", None, app, |ui, app| {
+        big(ui, app, "checkErrors", "Check", "ui.project.check", json!({}), false);
         big(ui, app, "preview", "Preview", "ui.project.preview", json!({}), false);
         big(ui, app, "finish", "Compile to\nPDF", "ui.project.compile", json!({"format": "pdf"}), false);
         big(ui, app, "documentTemplate", "Compile to\nWord", "ui.project.compile", json!({"format": "docx"}), false);

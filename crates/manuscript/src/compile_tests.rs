@@ -239,3 +239,165 @@ fn a_path_without_extension_gets_the_presets_format() {
     let bytes = std::fs::read(path).unwrap();
     assert!(bytes.starts_with(b"%PDF"), "a PDF file");
 }
+
+/// The section properties of the compiled document's sections, in order (the breaks', then
+/// the last section's).
+fn sections_of(doc: &Document) -> Vec<wordcraft_doc::section::SectionProps> {
+    let mut v: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.section.as_deref().cloned()).collect();
+    v.push(doc.last_section.clone());
+    v
+}
+
+/// Page numbering zones: a title page with no number, roman front matter, then chapters in
+/// arabic from 1, each on a right-hand page.
+#[test]
+fn numbering_zones_become_section_numbering() {
+    use wordcraft_doc::section::{NumFormat, SectionStart};
+    let mut s = session();
+    let root = scratch().join("z.wcproj");
+    let p = root.to_string_lossy().to_string();
+    s.run("project.new", &json!({"path": p})).unwrap();
+    let add = |s: &mut Session, v: Value| s.run("binder.add", &v).unwrap()["id"].as_str().unwrap().to_string();
+    let abs = add(&mut s, json!({"project": p, "title": "Abstract"}));
+    let ch = add(&mut s, json!({"project": p, "kind": "folder", "title": "Chapters"}));
+    let one = add(&mut s, json!({"project": p, "title": "One", "parent": ch}));
+    let two = add(&mut s, json!({"project": p, "title": "Two", "parent": ch}));
+    s.run("binder.setMeta", &json!({"project": p, "id": "s0001", "numbering": {"zone": "front", "show": "none"}})).unwrap();
+    s.run("binder.setMeta", &json!({"project": p, "id": abs, "numbering": {"zone": "front"}})).unwrap();
+    s.run("binder.setMeta", &json!({"project": p, "id": ch, "numbering": {"zone": "main", "startOn": "odd"}})).unwrap();
+    for (id, t) in [("s0001", "Title page"), (abs.as_str(), "Abstract text"), (one.as_str(), "One text"), (two.as_str(), "Two text")] {
+        write_section(&root, id, |s| {
+            s.run("text.insert", &json!({"text": t})).unwrap();
+        });
+    }
+    let out = root.parent().unwrap().join("z.docx");
+    s.run("compile.run", &json!({"project": p, "path": out.to_string_lossy()})).unwrap();
+    let doc = wordcraft_engine::io::open_path(&out).unwrap();
+    let secs = sections_of(&doc);
+    let got: Vec<(NumFormat, Option<u32>, SectionStart)> = secs.iter().map(|x| (x.page_num_format, x.page_num_start, x.start)).collect();
+    assert_eq!(
+        got,
+        [
+            (NumFormat::None, Some(1), SectionStart::NextPage),
+            (NumFormat::LowerRoman, None, SectionStart::NextPage),
+            (NumFormat::Decimal, Some(1), SectionStart::OddPage),
+        ],
+        "title (front, no number), abstract (front, carrying on), chapters (main from 1, odd pages); the two chapters share a section, apart by a page break"
+    );
+    assert!(s.run("binder.setMeta", &json!({"project": p, "id": abs, "numbering": {"zone": "sideways"}})).is_err());
+    assert!(s.run("binder.setMeta", &json!({"project": p, "id": abs, "numbering": 7})).is_err());
+}
+
+/// Items whose role is a generated list hold it in their place: the contents and the list of
+/// figures after the first section, in binder order. Without captions, a list of figures is
+/// empty: a warning, its heading kept.
+#[test]
+fn roles_place_generated_lists() {
+    let (mut s, root, p) = thesis();
+    let add = |s: &mut Session, v: Value| s.run("binder.add", &v).unwrap()["id"].as_str().unwrap().to_string();
+    let toc = add(&mut s, json!({"project": p, "title": "Contents", "role": "contents", "index": 1}));
+    let lof = add(&mut s, json!({"project": p, "title": "List of Figures", "role": "figures", "index": 2}));
+    let empty = s.run("compile.run", &json!({"project": p, "path": root.parent().unwrap().join("e.docx").to_string_lossy()})).unwrap();
+    assert!(empty["warnings"].to_string().contains("no Figure captions"), "{empty}");
+    write_section(&root, "s0002", |s| {
+        heading(s, "Methods", "Heading 1");
+        s.run("references.caption", &json!({"text": "Kiln plan"})).unwrap();
+    });
+    let out = root.parent().unwrap().join("r.docx");
+    let r = s.run("compile.run", &json!({"project": p, "path": out.to_string_lossy()})).unwrap();
+    assert!(!r["warnings"].to_string().contains("no Figure captions"), "{r}");
+    let ids = r["sections"].to_string();
+    assert!(ids.contains(&toc) && ids.contains(&lof), "{r}");
+    let doc = wordcraft_engine::io::open_path(&out).unwrap();
+    let text = doc.plain_text(StoryRef::Body);
+    let at = |t: &str| text.find(t).unwrap_or(usize::MAX);
+    assert!(at("Introduction text.") < at("Contents") && at("Contents") < at("List of Figures") && at("List of Figures") < usize::MAX, "{text}");
+    // A field spanning paragraphs comes back from the file as a FieldStart.
+    let fields: Vec<String> = doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| match o {
+            InlineObject::Field { instr, .. } | InlineObject::FieldStart { instr, .. } => Some(instr.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(fields.iter().any(|f| f.starts_with("TOC") && !f.contains("\\c")), "a table of contents: {fields:?}");
+    assert!(fields.iter().any(|f| f.starts_with("TOC") && f.contains("\\c") && f.contains("Figure")), "a list of figures: {fields:?}");
+}
+
+/// Captions numbered per chapter: Figure 1.1 and Figure 2.1 rather than 1 and 2.
+#[test]
+fn captions_can_be_numbered_per_chapter() {
+    let (mut s, root, p) = thesis();
+    for (id, title) in [("s0001", "Introduction"), ("s0002", "Methods")] {
+        write_section(&root, id, |s| {
+            heading(s, title, "Heading 1");
+            s.run("select.text", &json!({"text": title})).unwrap();
+            s.run("list.multilevelPreset", &json!({"preset": "headings"})).unwrap();
+            s.run("caret.docEnd", &json!({})).unwrap();
+            s.run("references.caption", &json!({"text": format!("{title} kiln")})).unwrap();
+        });
+    }
+    let mut text = std::fs::read_to_string(root.join(PROJECT_FILE)).unwrap();
+    text.push_str("\n[[preset]]\nname = \"Chapters\"\ncaption_numbering = \"per-chapter\"\n");
+    std::fs::write(root.join(PROJECT_FILE), text).unwrap();
+    let out = root.parent().unwrap().join("c.docx");
+    s.run("compile.run", &json!({"project": p, "path": out.to_string_lossy()})).unwrap();
+    let doc = wordcraft_engine::io::open_path(&out).unwrap();
+    let captions: Vec<String> =
+        doc.body.iter().filter_map(|b| b.as_para()).filter(|p| p.props.style.as_deref() == Some("Caption")).map(|p| p.plain_text()).collect();
+    assert_eq!(captions, ["Figure 1.1: Introduction kiln", "Figure 2.1: Methods kiln"]);
+    let mut bad = text_with_preset(&root, "Bad", "caption_numbering = \"sometimes\"");
+    bad.push(' ');
+    assert!(s.run("compile.run", &json!({"project": p, "path": out.to_string_lossy(), "preset": "Bad"})).is_err());
+}
+
+/// Add a preset to the project file; returns the file's new text.
+fn text_with_preset(root: &Path, name: &str, body: &str) -> String {
+    let mut text = std::fs::read_to_string(root.join(PROJECT_FILE)).unwrap();
+    text.push_str(&format!("\n[[preset]]\nname = \"{name}\"\n{body}\n"));
+    std::fs::write(root.join(PROJECT_FILE), &text).unwrap();
+    text
+}
+
+/// normalize_figures = "inline": a Square-wrapped picture becomes In Line with Text, and the
+/// floating warning goes.
+#[test]
+fn floating_figures_can_be_made_inline() {
+    let (mut s, root, p) = thesis();
+    write_section(&root, "s0001", |s| {
+        s.run("text.insert", &json!({"text": "Text beside a shape. "})).unwrap();
+        s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+        s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    });
+    let out = root.parent().unwrap().join("f.docx");
+    let r = s.run("compile.run", &json!({"project": p, "path": out.to_string_lossy()})).unwrap();
+    assert!(r["warnings"].to_string().contains("floating"), "{r}");
+    text_with_preset(&root, "Inline", "normalize_figures = \"inline\"");
+    let r = s.run("compile.run", &json!({"project": p, "path": out.to_string_lossy(), "preset": "Inline"})).unwrap();
+    assert!(!r["warnings"].to_string().contains("floating"), "{r}");
+    let doc = wordcraft_engine::io::open_path(&out).unwrap();
+    let floating = doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).filter(|o| o.is_floating()).count();
+    assert_eq!(floating, 0);
+}
+
+/// compile.check: comments and TODO markers are warnings, or errors with a final preset.
+#[test]
+fn check_finds_what_isnt_finished() {
+    let (mut s, root, p) = thesis();
+    write_section(&root, "s0001", |s| {
+        s.run("text.insert", &json!({"text": "Results TODO here."})).unwrap();
+        s.run("select.text", &json!({"text": "Results"})).unwrap();
+        s.run("review.newComment", &json!({"text": "Check this"})).unwrap();
+    });
+    let r = s.run("compile.check", &json!({"project": p})).unwrap();
+    assert_eq!(r["ok"], true, "warnings only: {r}");
+    let kinds: Vec<&str> = r["problems"].as_array().unwrap().iter().filter_map(|x| x["kind"].as_str()).collect();
+    assert!(kinds.contains(&"comments") && kinds.contains(&"marker"), "{r}");
+    text_with_preset(&root, "Final", "final = true");
+    let r = s.run("compile.check", &json!({"project": p, "preset": "Final"})).unwrap();
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(!root.parent().unwrap().join("thesis.pdf").exists(), "a check writes nothing");
+}
