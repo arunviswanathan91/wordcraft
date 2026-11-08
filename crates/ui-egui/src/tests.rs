@@ -7641,8 +7641,8 @@ fn thesis_mode_makes_a_project_and_moves_between_sections() {
     assert!(h.query_by_label_contains("Ink and Iron").is_some(), "the binder shows the project");
     assert!(h.query_by_label_contains("Untitled").is_some(), "and its sections");
     assert!(h.query_by_label("Project").is_some(), "the Project tab is there");
-    // The ribbon's New Section runs this (big ribbon buttons have no accessible name to click by).
-    h.state_mut().run("ui.project.add", json!({"kind": "section"})).unwrap();
+    // The ribbon's New Section, clicked by its name.
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "New Section").click();
     for _ in 0..4 {
         h.step();
     }
