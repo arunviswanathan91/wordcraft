@@ -7630,7 +7630,7 @@ fn thesis_mode_makes_a_project_and_moves_between_sections() {
     a.run("text.insert", json!({"text": "Methods text"})).unwrap();
     a.run("ui.project.openItem", json!({"id": "s0001"})).unwrap();
     assert_eq!(section(&a).as_deref(), Some("s0001"));
-    let saved = wordcraft_engine::io::open_path(&root.join("sections/s0002.docx")).unwrap();
+    let saved = wordcraft_engine::io::open_path(&root.join("sections/Untitled 2.docx")).unwrap();
     assert_eq!(saved.plain_text(wordcraft_doc::StoryRef::Body).trim(), "Methods text", "the section left was saved");
     // The Binder and the Project tab are shown.
     a.ui_command("ui.tab", &json!({"tab": "Project"})).unwrap().unwrap();
@@ -7639,7 +7639,7 @@ fn thesis_mode_makes_a_project_and_moves_between_sections() {
         h.step();
     }
     assert!(h.query_by_label_contains("Ink and Iron").is_some(), "the binder shows the project");
-    assert!(h.query_by_label_contains("Untitled").is_some(), "and its sections");
+    assert!(h.query_all_by_label_contains("Untitled").count() >= 2, "and its sections");
     assert!(h.query_by_label("Project").is_some(), "the Project tab is there");
     // The ribbon's New Section, clicked by its name.
     h.get_by_role_and_label(egui::accesskit::Role::Button, "New Section").click();
@@ -7681,5 +7681,63 @@ fn thesis_mode_compiles_and_previews() {
     let r = a.run("ui.project.check", json!({})).unwrap();
     assert_eq!(r["ok"], true, "{r}");
     assert!(a.project.as_ref().unwrap().error.as_deref().is_some_and(|e| e.contains("TODO")), "listed in the Binder");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Thesis mode edits one section at a time: clicking a section in the Binder shows it in the
+/// window, saves and closes the one left, and keeps the Project tab. New Project drops an
+/// extension a Save dialog added; Import splits a document into sections; the project open
+/// at closing comes back.
+#[test]
+fn thesis_mode_is_one_editor_with_a_binder() {
+    use egui_kittest::kittest::Queryable;
+    let dir = std::env::temp_dir().join(format!("wc-thesis-one-{}-{}", std::process::id(), wordcraft_engine::cmd::now_unix()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut a = app();
+    // "My Thesis.wcproj.docx" from a Save dialog makes "My Thesis.wcproj".
+    a.run("ui.project.new", json!({"path": dir.join("My Thesis.wcproj.docx").to_string_lossy()})).unwrap();
+    let root = dir.join("My Thesis.wcproj");
+    assert!(root.join("project.toml").is_file());
+    assert_eq!(a.project.as_ref().unwrap().info["title"], "My Thesis");
+    assert_eq!(a.ui.tab, "Project");
+    // Import a document with two chapters.
+    let mut d = Session::new(wordcraft_doc::Document::from_text("Kilnwork\nIntro text\nGlazework\nMethods text"));
+    for h in ["Kilnwork", "Glazework"] {
+        d.run("select.text", &json!({"text": h})).unwrap();
+        d.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    }
+    let src = dir.join("draft.docx");
+    wordcraft_engine::io::save_path(&src, &d.doc).unwrap();
+    a.run("ui.project.import", json!({"path": src.to_string_lossy()})).unwrap();
+    assert!(root.join("sections/Kilnwork.docx").is_file() && root.join("sections/Glazework.docx").is_file());
+    a.project.as_mut().unwrap().renaming = None;
+    let mut h = harness(a);
+    for _ in 0..4 {
+        h.step();
+    }
+    // Click Glazework in the Binder: it shows, typed text is kept, one document is open.
+    h.get_by_label("Glazework").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    let sec = |h: &egui_kittest::Harness<'_, WordApp>| crate::project_ui::current_section(h.state());
+    let glaze = sec(&h).unwrap();
+    assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Methods text"));
+    h.state_mut().run("text.insert", json!({"text": "More. "})).unwrap();
+    h.get_by_label("Kilnwork").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_ne!(sec(&h).unwrap(), glaze, "Kilnwork shows");
+    assert_eq!(h.state().session.documents().len(), 1, "one section open at a time");
+    assert_eq!(h.state().ui.tab, "Project", "the tab stays");
+    let saved = wordcraft_engine::io::open_path(&root.join("sections/Glazework.docx")).unwrap();
+    assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("More."), "the section left was saved");
+    // Closing with the project open: it comes back next time.
+    let prefs = h.state().prefs();
+    let mut b = app();
+    b.apply_prefs(prefs);
+    assert!(crate::project_ui::reopen_last_project(&mut b));
+    assert_eq!(b.project.as_ref().unwrap().info["title"], "My Thesis");
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -602,7 +602,13 @@ fn main() -> eframe::Result {
             // Nothing to open (no files, no sample, no control channel driving the editor): start
             // on File › Home, as Word does (#766), unless the Start screen option is off. Files
             // macOS hands over later open on top of it and close it (`apple_events`).
-            if files.is_empty() && other_files.is_empty() && !sample && control_port.is_none() {
+            // Thesis mode: the project open last time comes back.
+            if files.is_empty()
+                && other_files.is_empty()
+                && !sample
+                && control_port.is_none()
+                && !wordcraft_ui_egui::project_ui::reopen_last_project(&mut app)
+            {
                 app.start_screen();
             }
             for f in files {

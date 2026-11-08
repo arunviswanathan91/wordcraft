@@ -70,7 +70,7 @@ What it lacks is the project layer around all this. This document designs that l
 | **Project** | A folder ending in `.wcproj` holding `project.toml` and the subfolders below |
 | **Binder** | The tree of items in `project.toml` |
 | **Item** | A folder (groups items, may carry its own text) or a section |
-| **Section** | One `.docx` under `sections/`, named by the item's id, never by its title |
+| **Section** | One `.docx` under `sections/`, named by its title (`Introduction.docx`, kept unique and safe for every system, renamed with the section); projects from before name them by id |
 | **Stack** | The items shown together in the editor: by default, the children of the selected folder |
 | **Research** | Files kept with the project but never compiled (PDFs, images, notes) |
 | **Snapshot** | A saved copy of a section at a moment, with an optional label |
@@ -1003,6 +1003,7 @@ maintainers.
 
 | Date | Change |
 |---|---|
+| 2026-11-08 | From first use: one section at a time in the editor, files named by section title (`file` in `[[item]]`), `binder.import` with typed-heading detection, the last project reopened |
 | 2026-11-08 | Milestone 2: roles and generated items, numbering zones, per-chapter captions, figure normalisation, compile.check |
 | 2026-11-08 | Milestone 2 started: compile pipeline, presets, Compile on the Project tab |
 | 2026-11-08 | Thesis mode's first visible part (Project tab, Binder pane) built before compile, at the owner's request |

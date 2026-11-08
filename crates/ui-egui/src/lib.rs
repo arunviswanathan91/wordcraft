@@ -338,6 +338,9 @@ pub struct UiState {
     /// panes in this order, the first outermost. Empty: the default order.
     #[serde(deserialize_with = "panes::lenient_order", skip_serializing_if = "Vec::is_empty")]
     pub pane_order: Vec<String>,
+    /// The manuscript project open when WordCraft last closed (thesis mode), reopened at start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_project: Option<String>,
     /// Headings whose sub-headings the Navigation pane hides (#1997); per session, not saved.
     #[serde(skip)]
     pub nav_collapsed: std::collections::HashSet<wordcraft_doc::Path>,
@@ -471,6 +474,7 @@ impl Default for UiState {
             styles_pane_width: None,
             pane_places: Default::default(),
             pane_order: Vec::new(),
+            last_project: None,
             nav_collapsed: Default::default(),
             show_discord: true,
             author: None,
