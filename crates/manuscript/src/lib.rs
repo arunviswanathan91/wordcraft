@@ -16,6 +16,7 @@
 pub mod binder;
 mod cache;
 mod commands;
+pub mod compile;
 pub mod project;
 pub mod snapshot;
 
@@ -42,5 +43,7 @@ pub fn ids() -> Vec<&'static str> {
     specs().iter().map(|s: &CommandSpec| s.id).collect()
 }
 
+#[cfg(test)]
+mod compile_tests;
 #[cfg(test)]
 mod tests;

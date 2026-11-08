@@ -8,7 +8,7 @@ use super::*;
 use crate::project::{MAX_DEPTH, PROJECT_FILE, Project};
 
 /// A fresh, empty folder for one test.
-fn scratch() -> PathBuf {
+pub(crate) fn scratch() -> PathBuf {
     static N: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
         "wc-manuscript-{}-{}-{}",
@@ -20,7 +20,7 @@ fn scratch() -> PathBuf {
     dir
 }
 
-fn session() -> Session {
+pub(crate) fn session() -> Session {
     let mut s = Session::new(wordcraft_doc::Document::new());
     install(&mut s);
     s
