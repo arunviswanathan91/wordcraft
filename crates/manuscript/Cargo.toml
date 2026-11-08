@@ -1,0 +1,17 @@
+[package]
+name = "wordcraft-manuscript"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WordCraft manuscript projects: a binder of section documents in a .wcproj folder, with snapshots"
+
+[lints]
+workspace = true
+
+[dependencies]
+wordcraft-doc = { workspace = true }
+wordcraft-engine = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "1"
+chrono = { workspace = true }

@@ -131,6 +131,12 @@ impl WordApp {
         if let Some(r) = table_pen::toggle(self, id, &params) {
             return r;
         }
+        if let Some(r) = crate::project_ui::command(self, id, &params) {
+            if let Err(e) = &r {
+                self.status(e.clone());
+            }
+            return r;
+        }
         let ctx = self.ctx.clone();
         if let Some(r) = zotero::command(self, id, &params, ctx.as_ref()) {
             if let Err(e) = &r {
@@ -1029,6 +1035,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
     matches!(
         id,
         "file.new"
+            | "ui.project.new"
+            | "ui.project.open"
             | "file.newFromTemplate"
             | "file.listTemplates"
             | "file.open"

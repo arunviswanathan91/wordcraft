@@ -953,9 +953,9 @@ described here.
 |---|---|---|
 | 0 | Engine fixes from [Figures](#engine-fixes-this-depends-on): Lock Anchor, the Fix Position on Page drag reset, Keep with Next on captions (**done**; the drag behaviour is still to be confirmed against Word); top and bottom of page placement presets (**done**: Position › Figure at Top / Bottom of Page). Not yet: keeping a caption with a floating figure (see Figures) | 3–5 days |
 | 0b | Numbering in the engine, for any document: `numbering.check`, `numbering.repair`, `numbering.detect` with their task pane (see [Heading and list numbering](#heading-and-list-numbering)). **Started:** `numbering.check` and `numbering.repair` for otherList, restart, skippedLevel and doubleNumber, body headings only; `numbering.detect` and `numbering.convert` for decimal and Chapter/Section numbers; to do: letters and roman numerals, typed and stale references, body lists, marking a problem as intended. The Heading Numbering pane is done | 1.5–2 weeks |
-| 1 | `crates/manuscript`: project format, cache (with heading and caption counts), binder commands, numbering start sync, snapshots, CLI `project` subcommands, tests. No UI | 1–1.5 weeks |
+| 1 | `crates/manuscript`: project format, cache (with heading and caption counts), binder commands, numbering start sync, snapshots, CLI `project` subcommands, tests. No UI (**done**, except the cache's heading and caption counts, numbering start sync and the reference index, which come with milestones 2 and 3) | 1–1.5 weeks |
 | 2 | Compile: pipeline, bookmark renaming, sources merge, heading-list mapping, per-chapter captions, figure normalisation, cross-section references, roles and generated items, page numbering zones (with the uncounted-page pass), checks, presets, fixtures | 2.5–3 weeks |
-| 3 | UI: stacked editor, binder sidebar, inspector, compile dialog, Project tab, targets | 2–3 weeks |
+| 3 | UI: stacked editor, binder sidebar, inspector, compile dialog, Project tab, targets (**started ahead of milestone 2**, at the owner's request: the Project tab and the Binder pane are done; the stacked editor, inspector, compile dialog and targets UI are still to do) | 2–3 weeks |
 | 4 | Project templates and metadata, export sets (split output, `as-in-full` numbering, PDF page ranges), corkboard, supervisor round trip, live caption offsets in the stack, web zip projects, import and split of a long `.docx` at headings | 2–3 weeks |
 | later | Abbreviation list (a marked-term list in front matter, with a check that each term is spelled out before its first use in binder order); Zotero rendering without Zotero, after the licence questions above | — |
 
@@ -999,6 +999,8 @@ maintainers.
 
 | Date | Change |
 |---|---|
+| 2026-11-08 | Thesis mode's first visible part (Project tab, Binder pane) built before compile, at the owner's request |
+| 2026-11-08 | Milestone 1: the `manuscript` crate, project format, binder commands, snapshots, CLI |
 | 2026-11-07 | Milestone 0b: Heading Numbering pane |
 | 2026-11-07 | Milestone 0b: typed heading numbers detected and converted |
 | 2026-11-07 | Milestone 0b started: numbering check and repair |

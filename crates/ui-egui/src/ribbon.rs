@@ -20,6 +20,7 @@ mod language;
 mod layout;
 mod mailings;
 mod picture;
+mod project;
 mod references;
 mod review;
 mod shape;
@@ -428,6 +429,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "View" => view(app, ui),
                         "Developer" => developer(app, ui),
                         "Zotero" => zotero(app, ui),
+                        "Project" => project::project(app, ui),
                         "Help" => help(app, ui),
                         "Table Design" => table_design(app, ui),
                         "Table Layout" => table_layout(app, ui),
