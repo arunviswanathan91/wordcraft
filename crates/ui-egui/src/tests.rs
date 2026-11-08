@@ -7675,5 +7675,11 @@ fn thesis_mode_compiles_and_previews() {
     assert_ne!(a.session.document_id(), section, "the preview is a document of its own");
     assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Chapter two."));
     assert!(crate::project_ui::current_section(&a).is_none(), "the preview isn't a section");
+    // Check: the TODO typed in a section is something to look at, shown in the Binder.
+    a.run("ui.project.openItem", json!({"id": "s0001"})).unwrap();
+    a.run("text.insert", json!({"text": " TODO"})).unwrap();
+    let r = a.run("ui.project.check", json!({})).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(a.project.as_ref().unwrap().error.as_deref().is_some_and(|e| e.contains("TODO")), "listed in the Binder");
     let _ = std::fs::remove_dir_all(&dir);
 }
