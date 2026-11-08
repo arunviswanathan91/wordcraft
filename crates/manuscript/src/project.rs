@@ -60,6 +60,9 @@ pub struct Item {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_words: Option<u64>,
+    /// How its pages are numbered when compiled (inherited by what a folder holds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbering: Option<NumberingRule>,
     /// Whether compiling includes it.
     #[serde(default = "yes")]
     pub include: bool,
@@ -85,11 +88,30 @@ impl Item {
             status: String::new(),
             role: String::new(),
             target_words: None,
+            numbering: None,
             include: true,
             children: Vec::new(),
             extra: toml::Table::new(),
         }
     }
+}
+
+/// How an item's pages are numbered in the compiled document (`[item.numbering]`). Unset
+/// fields come from the folder above.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NumberingRule {
+    /// `continue` (as before), `front` (i, ii, iii from i), `main` (1, 2, 3 from 1), `appendix`
+    /// (numbers carry on), `none` (no numbers shown).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
+    /// `all`, `not-first` (none on its first page) or `none`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show: Option<String>,
+    /// `next` (a new page), `odd` (a right-hand page) or `even`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_on: Option<String>,
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 
 /// Word targets for the whole project.

@@ -212,6 +212,30 @@ pub(crate) fn command(app: &mut WordApp, id: &str, params: &Value) -> Option<Res
                 None => Err(tl!("Pick a section to take a snapshot of.").into()),
             }
         }
+        "ui.project.check" => {
+            save_open_section(app);
+            let r = project_run(app, "compile.check", json!({"preset": params.get("preset")}));
+            if let Ok(v) = &r {
+                let problems: Vec<String> = v["problems"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter().map(|p| format!("{}{}", if p["error"] == true { "✗ " } else { "• " }, p["message"].as_str().unwrap_or(""))).collect()
+                    })
+                    .unwrap_or_default();
+                let msg = if problems.is_empty() {
+                    tl!("Ready to submit: nothing to fix.").to_string()
+                } else if v["ok"] == true {
+                    crate::i18n::fmt(tl!("{n} things to look at before submitting"), &[("n", &problems.len().to_string())])
+                } else {
+                    crate::i18n::fmt(tl!("Not ready: {n} problems to fix"), &[("n", &problems.len().to_string())])
+                };
+                app.status(msg);
+                if let Some(p) = app.project.as_mut() {
+                    p.error = (!problems.is_empty()).then(|| problems.join("\n"));
+                }
+            }
+            r
+        }
         "ui.project.preview" => {
             save_open_section(app);
             let r = project_run(app, "compile.preview", json!({"preset": params.get("preset")}));
