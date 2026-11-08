@@ -7101,6 +7101,7 @@ dependencies = [
  "wordcraft-fonts",
  "wordcraft-geom",
  "wordcraft-layout",
+ "wordcraft-manuscript",
  "wordcraft-render",
  "wordcraft-zotero",
  "zbus",

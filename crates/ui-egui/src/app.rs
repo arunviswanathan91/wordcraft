@@ -26,7 +26,9 @@ impl WordApp {
     /// Creates the app: adopts the system locale, then initializes the document session, UI state,
     /// services, printing, canvas, dialogs, previews, control and screenshot state, font and theme
     /// tracking.
-    pub fn new(session: Session, services: Services) -> Self {
+    pub fn new(mut session: Session, services: Services) -> Self {
+        // Manuscript projects' commands (`project.*`, `binder.*`, `snapshot.*`) for thesis mode.
+        wordcraft_manuscript::install(&mut session);
         // Numeral › System follows the system locale, found here rather than in layout.
         if let Some(tag) = sys_locale::get_locale() {
             wordcraft_engine::set_system_locale(&tag);
@@ -136,6 +138,7 @@ impl WordApp {
             quit_requested: false,
             autosave: true,
             zotero: zotero::ZoteroLink::default(),
+            project: None,
             ctx: None,
             ime_origin: false,
             read_aloud_error: None,

@@ -30,6 +30,8 @@ pub fn enabled(app: &WordApp, id: &str) -> bool {
         None if id.starts_with("ui.zotero.") => app.zotero.busy.is_none() && !cfg!(target_arch = "wasm32"),
         None if id == "ui.linkTextBox" => enabled(app, "shape.link"),
         None if id == "ui.crop" => crate::crop::can_toggle(app),
+        // Thesis mode: making and opening a project always work; the rest need one open.
+        None if id.starts_with("ui.project.") => matches!(id, "ui.project.new" | "ui.project.open") || app.project.is_some(),
         None => id.starts_with("ui."),
     }
 }

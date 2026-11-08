@@ -64,6 +64,8 @@ pub enum Pane {
     Comments,
     /// Heading numbering problems and typed heading numbers (`numbering_pane`).
     Numbering,
+    /// Thesis mode's binder: the open project's folders and sections (`project_ui`).
+    Binder,
 }
 
 impl Pane {
@@ -81,6 +83,7 @@ impl Pane {
             Self::Proofing => "Proofing",
             Self::Comments => "Comments",
             Self::Numbering => "Heading Numbering",
+            Self::Binder => "Binder",
         }
     }
 
@@ -93,6 +96,7 @@ impl Pane {
             Self::StyleInspector => (Edge::End, 240.0),
             Self::Accessibility => (Edge::End, 280.0),
             Self::Numbering => (Edge::End, 300.0),
+            Self::Binder => (Edge::Start, 260.0),
             Self::AltText => (Edge::End, 260.0),
             Self::FormatShape => (Edge::End, 280.0),
             Self::RestrictEditing => (Edge::End, 270.0),
@@ -117,10 +121,11 @@ impl Pane {
             Self::Proofing => "proofing",
             Self::Comments => "comments",
             Self::Numbering => "numbering",
+            Self::Binder => "binder",
         }
     }
 
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 13] = [
         Self::SmartArtText,
         Self::Navigation,
         Self::Clipboard,
@@ -133,6 +138,7 @@ impl Pane {
         Self::Proofing,
         Self::Comments,
         Self::Numbering,
+        Self::Binder,
     ];
 
     fn from_key(key: &str) -> Option<Self> {
@@ -152,6 +158,7 @@ impl Pane {
             Self::FormatShape => Some("view.formatShapePane"),
             Self::Comments => Some("view.commentsPane"),
             Self::Numbering => Some("view.numberingPane"),
+            Self::Binder => Some("ui.project.binder"),
             Self::RestrictEditing | Self::Proofing => None,
         }
     }
@@ -172,6 +179,7 @@ impl PaneContent<Pane> for Content<'_> {
             Pane::StyleInspector => inspector(app, ui),
             Pane::Accessibility => crate::a11y_pane::accessibility(app, ui),
             Pane::Numbering => crate::numbering_pane::pane(app, ui),
+            Pane::Binder => crate::project_ui::binder(app, ui),
             Pane::AltText => crate::a11y_pane::alt_text(app, ui),
             Pane::FormatShape => {
                 egui::ScrollArea::vertical().show(ui, |ui| crate::format_shape::pane(app, ui));
