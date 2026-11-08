@@ -6839,6 +6839,7 @@ dependencies = [
  "sys-locale",
  "wordcraft-doc",
  "wordcraft-engine",
+ "wordcraft-manuscript",
  "wordcraft-mcp",
  "wordcraft-render",
  "wordcraft-zotero",
@@ -7004,6 +7005,18 @@ dependencies = [
  "wordcraft-fonts",
  "wordcraft-geom",
  "wordcraft-metafile",
+]
+
+[[package]]
+name = "wordcraft-manuscript"
+version = "0.15.1"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "toml",
+ "wordcraft-doc",
+ "wordcraft-engine",
 ]
 
 [[package]]

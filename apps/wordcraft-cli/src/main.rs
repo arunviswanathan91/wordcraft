@@ -169,6 +169,8 @@ fn positionals<'a>(args: &'a [String], specs: &[OptionSpec]) -> Vec<&'a String> 
 fn session(doc: wordcraft_doc::Document) -> Session {
     let mut s = Session::new(doc);
     s.system_region = system_region();
+    // Manuscript projects' commands too (`project.new`, `binder.add`, `snapshot.take`…).
+    wordcraft_manuscript::install(&mut s);
     s
 }
 
