@@ -123,7 +123,9 @@ fn math_menu_button(ui: &mut Ui, app: &mut WordApp, picture: &str, label: &str, 
         crate::widgets::label_line(ui, r.center().x, y, l, regular(11.5), t.text, i + 1 == lines.len());
         y += LABEL_PITCH;
     }
-    let resp = resp.on_hover_text(label.replace('\n', " "));
+    let name = label.replace('\n', " ");
+    let resp = resp.on_hover_text(&name);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
     crate::rtl::menu(&resp).show(|ui| {
         ui.set_min_width(260.0);
         menu(ui, app);

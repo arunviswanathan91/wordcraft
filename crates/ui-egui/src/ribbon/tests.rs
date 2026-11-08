@@ -1005,3 +1005,36 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// Large ribbon buttons are named by their label, so screen readers (AccessKit) and label
+/// queries find them: Insert Caption on References runs its command, and the big Paste menu
+/// button on Home is "Paste" (what it shows, not its tooltip) and opens its menu.
+#[test]
+fn big_ribbon_buttons_are_named_by_their_label() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("A chart")), crate::Services::default());
+    app.ui.tab = "References".into();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(3);
+    let caption = tl!("Insert\nCaption").replace('\n', " ");
+    assert!(h.query_by_label(&caption).is_some(), "{caption} is a named button");
+    h.get_by_label(&caption).click();
+    h.run_steps(2);
+    assert!(matches!(h.state().dialog, Some(crate::dialogs::Dialog::Refs(_))), "Insert Caption opens its dialog");
+
+    h.state_mut().dialog = None;
+    h.state_mut().ui.tab = "Home".into();
+    h.run_steps(3);
+    let paste = tl!("Paste");
+    assert!(h.query_by_label(paste).is_some(), "the big Paste button is named {paste}");
+    h.get_by_label(paste).click();
+    h.run_steps(2);
+    assert!(h.query_by_label_contains(tl!("Paste Special…")).is_some(), "Paste opens its menu");
+}

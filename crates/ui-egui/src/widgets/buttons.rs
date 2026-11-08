@@ -115,11 +115,15 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
         label_line(ui, r.center().x, y, l, regular(11.5), if on { t.text } else { t.text_disabled }, menu && i + 1 == lines.len());
         y += LABEL_PITCH;
     }
-    let resp = tooltip(app, resp, &label.replace('\n', " "), id);
+    let name = label.replace('\n', " ");
+    let resp = tooltip(app, resp, &name, id);
     command_menu(&resp, app, id);
     if resp.clicked() && on && !menu {
         run_from_ribbon(app, id, params);
     }
+    // Named by its label, as the small buttons are, so screen readers and label queries find
+    // it; without this it is an anonymous click area.
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &name));
     resp
 }
 
@@ -279,7 +283,14 @@ pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_
     let reason = if on { None } else { Some(app.session.why_disabled(id).unwrap_or("")) };
     let (title, notes) = tooltip_lines(tip, &shortcut_text(app, id), "", reason);
     show_hint(&resp, &title, &notes);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
+    // A large menu button is named by the label it shows (Paste, not the tooltip's "Paste (⌘V)"),
+    // so the spoken name matches what is on screen; a small one keeps its tooltip, which is all
+    // it shows in a compact group.
+    let name = match label {
+        Some(l) if big_btn => l.replace('\n', " "),
+        _ => tip.to_string(),
+    };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &name));
     if !on {
         return;
     }
