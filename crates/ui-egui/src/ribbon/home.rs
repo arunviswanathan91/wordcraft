@@ -249,6 +249,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         }
                         ui.separator();
                         mi(ui, app, "Define New Multilevel List…", "list.define", json!({}));
+                        mi(ui, app, "Check Heading Numbering…", "view.numberingPane", json!({"value": true}));
                         ui.separator();
                         for lv in 0..5u64 {
                             mi(ui, app, &format!("Change to Level {}", lv + 1), "para.listLevel", json!({"level": lv}));

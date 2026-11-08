@@ -13,7 +13,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
 mod format;
 mod lists;
-mod outline;
+pub(crate) mod outline;
 mod styles;
 mod tabs_borders;
 

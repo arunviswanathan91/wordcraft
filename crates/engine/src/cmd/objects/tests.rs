@@ -1532,3 +1532,37 @@ fn lock_anchor_needs_a_floating_object_and_toggles() {
     s.run("edit.undo", &json!({})).unwrap();
     assert!(locked(&s));
 }
+
+/// Position › Figure at Top / Bottom of Page: an In Line with Text picture becomes a figure
+/// centred across the top (or bottom) of the text area, Top and Bottom wrapped, its anchor
+/// locked, and text added above it doesn't move it on its page.
+#[test]
+fn figure_at_top_or_bottom_of_page_stays_at_the_page_edge() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let text = "The quick brown fox jumps over the lazy dog. ".repeat(8);
+    for (preset, top) in [("figureTop", true), ("figureBottom", false)] {
+        let mut s = Session::new(wordcraft_doc::Document::from_text(&format!("{text}\n{text}\n{text}")));
+        s.run("caret.docEnd", &json!({})).unwrap();
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        s.run("insert.picture", &json!({"data": data, "width": 200})).unwrap();
+        s.run("arrange.position", &json!({"preset": preset})).unwrap();
+        let f = selected(&s).unwrap().1.frame().unwrap().2.clone();
+        assert_eq!((f.wrap, f.h_rel, f.v_rel, f.h_align), (Wrap::TopAndBottom, Anchor::Margin, Anchor::Margin, Some(FloatAlign::Center)), "{f:?}");
+        assert_eq!(f.v_align, Some(if top { FloatAlign::Start } else { FloatAlign::End }));
+        assert!(f.locked, "anchor locked");
+        let sect = s.doc.last_section.clone();
+        let edge = |s: &mut Session| {
+            let o = object_area(s);
+            assert_eq!(o.page, 0, "{o:?}");
+            if top { o.rect.y } else { o.rect.y + o.rect.h }
+        };
+        let want = if top { sect.margin_top } else { sect.page_h - sect.margin_bottom };
+        assert!((edge(&mut s) - want).abs() < 0.5, "{preset}: at the edge of the text area");
+        let o = object_area(&mut s);
+        let mid = sect.margin_left + sect.text_width() / 2.0;
+        assert!((o.rect.x + o.rect.w / 2.0 - mid).abs() < 0.5, "{preset}: centred: {:?}", o.rect);
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "A new opening sentence. "})).unwrap();
+        assert!((edge(&mut s) - want).abs() < 0.5, "{preset}: still at the edge after editing above");
+    }
+}

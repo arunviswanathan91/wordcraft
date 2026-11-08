@@ -62,6 +62,8 @@ pub enum Pane {
     RestrictEditing,
     Proofing,
     Comments,
+    /// Heading numbering problems and typed heading numbers (`numbering_pane`).
+    Numbering,
 }
 
 impl Pane {
@@ -78,6 +80,7 @@ impl Pane {
             Self::RestrictEditing => "Restrict Editing",
             Self::Proofing => "Proofing",
             Self::Comments => "Comments",
+            Self::Numbering => "Heading Numbering",
         }
     }
 
@@ -89,6 +92,7 @@ impl Pane {
             Self::Styles => (Edge::End, 250.0),
             Self::StyleInspector => (Edge::End, 240.0),
             Self::Accessibility => (Edge::End, 280.0),
+            Self::Numbering => (Edge::End, 300.0),
             Self::AltText => (Edge::End, 260.0),
             Self::FormatShape => (Edge::End, 280.0),
             Self::RestrictEditing => (Edge::End, 270.0),
@@ -112,10 +116,11 @@ impl Pane {
             Self::RestrictEditing => "restrictEditing",
             Self::Proofing => "proofing",
             Self::Comments => "comments",
+            Self::Numbering => "numbering",
         }
     }
 
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::SmartArtText,
         Self::Navigation,
         Self::Clipboard,
@@ -127,6 +132,7 @@ impl Pane {
         Self::RestrictEditing,
         Self::Proofing,
         Self::Comments,
+        Self::Numbering,
     ];
 
     fn from_key(key: &str) -> Option<Self> {
@@ -145,6 +151,7 @@ impl Pane {
             Self::AltText => Some("view.altTextPane"),
             Self::FormatShape => Some("view.formatShapePane"),
             Self::Comments => Some("view.commentsPane"),
+            Self::Numbering => Some("view.numberingPane"),
             Self::RestrictEditing | Self::Proofing => None,
         }
     }
@@ -164,6 +171,7 @@ impl PaneContent<Pane> for Content<'_> {
             Pane::Styles => styles(app, ui),
             Pane::StyleInspector => inspector(app, ui),
             Pane::Accessibility => crate::a11y_pane::accessibility(app, ui),
+            Pane::Numbering => crate::numbering_pane::pane(app, ui),
             Pane::AltText => crate::a11y_pane::alt_text(app, ui),
             Pane::FormatShape => {
                 egui::ScrollArea::vertical().show(ui, |ui| crate::format_shape::pane(app, ui));

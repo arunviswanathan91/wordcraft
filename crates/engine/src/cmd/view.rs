@@ -119,6 +119,11 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"value"?: bool}"#)
         .pure(),
+        CommandSpec::new("view.numberingPane", "Heading Numbering Pane", "Home › Paragraph › Multilevel List", |s, v| {
+            toggle(s, v, |x| &mut x.numbering_pane)
+        })
+        .params(r#"{"value"?: bool}"#)
+        .pure(),
         CommandSpec::new("view.altTextPane", "Alt Text Pane", "Review › Accessibility", |s, v| toggle(s, v, |x| &mut x.alt_text_pane))
             .params(r#"{"value"?: bool}"#)
             .pure(),
