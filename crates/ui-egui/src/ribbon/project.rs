@@ -12,6 +12,7 @@ pub(super) fn project(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Binder", None, app, |ui, app| {
         big(ui, app, "blankPage", "New\nSection", "ui.project.add", json!({"kind": "section"}), false);
         big(ui, app, "folder", "New\nFolder", "ui.project.add", json!({"kind": "folder"}), false);
+        big(ui, app, "object", "Import\nDocument", "ui.project.import", json!({}), false);
         let shown = app.project.as_ref().is_some_and(|p| p.binder);
         crate::widgets::big_toggle(ui, app, "navPane", "Binder", "ui.project.binder", shown);
     });

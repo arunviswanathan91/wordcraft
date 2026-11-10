@@ -25,6 +25,7 @@ impl WordApp {
         ui.keyboard = self.session.keymap.clone();
         ui.ribbon = self.session.ribbon.clone();
         ui.ink_pens = self.session.view.draw.pens.clone();
+        ui.last_project = self.project.as_ref().map(|p| p.root.clone());
         ui
     }
 

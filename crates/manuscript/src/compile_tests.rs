@@ -7,13 +7,13 @@ use wordcraft_doc::{Document, StoryRef};
 use wordcraft_engine::Session;
 
 use crate::project::PROJECT_FILE;
-use crate::tests::{scratch, session};
+use crate::tests::{scratch, section, session};
 
 /// Write section `id` of the project at `root` from a session the closure builds.
 fn write_section(root: &Path, id: &str, build: impl FnOnce(&mut Session)) {
     let mut s = Session::new(Document::new());
     build(&mut s);
-    wordcraft_engine::io::save_path(&root.join(format!("sections/{id}.docx")), &s.doc).unwrap();
+    wordcraft_engine::io::save_path(&section(root, id), &s.doc).unwrap();
 }
 
 fn heading(s: &mut Session, text: &str, style: &str) {
@@ -188,7 +188,7 @@ fn presets_add_titles_and_a_table_of_contents() {
 #[test]
 fn problems_are_warnings_and_templates_stay_inside() {
     let (mut s, root, p) = thesis();
-    std::fs::remove_file(root.join("sections/s0002.docx")).unwrap();
+    std::fs::remove_file(section(&root, "s0002")).unwrap();
     let r = s.run("compile.run", &json!({"project": p, "path": root.parent().unwrap().join("w.docx").to_string_lossy()})).unwrap();
     assert_eq!(r["sections"].as_array().unwrap().len(), 3);
     assert!(r["warnings"].to_string().contains("left out"), "{r}");

@@ -7,6 +7,11 @@ use wordcraft_engine::Session;
 use super::*;
 use crate::project::{MAX_DEPTH, PROJECT_FILE, Project};
 
+/// Section `id`'s file in the project at `root`.
+pub(crate) fn section(root: &Path, id: &str) -> PathBuf {
+    Project::open(root).unwrap().section_path(id).unwrap()
+}
+
 /// A fresh, empty folder for one test.
 pub(crate) fn scratch() -> PathBuf {
     static N: AtomicU64 = AtomicU64::new(0);
@@ -59,7 +64,7 @@ fn a_new_project_has_its_folders_and_one_empty_section() {
     for dir in ["sections", "snapshots", "research"] {
         assert!(root.join(dir).is_dir(), "{dir}");
     }
-    assert!(root.join("sections/s0001.docx").is_file());
+    assert!(section(&root, "s0001").is_file());
     let v = info(&mut s, &p);
     assert_eq!((v["title"].as_str(), v["recovered"].clone()), (Some("Ink and Iron"), Value::Null));
     assert_eq!(tree(&v), ["Untitled"]);
@@ -74,7 +79,7 @@ fn binder_items_are_added_moved_changed_and_trashed() {
     let (root, p) = project(&mut s);
     let folder = s.run("binder.add", &json!({"project": p, "kind": "folder", "title": "Front matter"})).unwrap()["id"].as_str().unwrap().to_string();
     let abs = s.run("binder.add", &json!({"project": p, "title": "Abstract", "parent": folder})).unwrap()["id"].as_str().unwrap().to_string();
-    assert!(root.join(format!("sections/{abs}.docx")).is_file(), "a section gets its document");
+    assert!(section(&root, &abs).is_file(), "a section gets its document");
     s.run("binder.move", &json!({"project": p, "id": "s0001", "parent": folder, "index": 0})).unwrap();
     assert_eq!(tree(&info(&mut s, &p)), ["Front matter", "Front matter/Untitled", "Front matter/Abstract"]);
     s.run("binder.rename", &json!({"project": p, "id": "s0001", "title": "Title page"})).unwrap();
@@ -94,10 +99,10 @@ fn binder_items_are_added_moved_changed_and_trashed() {
     // Delete: into the Trash, file kept; Empty Trash removes it.
     s.run("binder.delete", &json!({"project": p, "id": abs})).unwrap();
     assert_eq!(tree(&info(&mut s, &p)), ["Front matter", "Front matter/Title page", "Trash", "Trash/Abstract"]);
-    assert!(root.join(format!("sections/{abs}.docx")).is_file());
+    assert!(section(&root, &abs).is_file());
     let r = s.run("binder.emptyTrash", &json!({"project": p})).unwrap();
     assert_eq!(r["removed"], json!([abs]));
-    assert!(!root.join(format!("sections/{abs}.docx")).exists());
+    assert!(!section(&root, &abs).exists());
     // Ids aren't given out again.
     let next = s.run("binder.add", &json!({"project": p})).unwrap()["id"].as_str().unwrap().to_string();
     assert_ne!(next, abs);
@@ -216,7 +221,7 @@ fn a_newer_project_format_is_refused() {
 fn snapshots_are_taken_listed_and_restored() {
     let mut s = session();
     let (root, p) = project(&mut s);
-    let path = root.join("sections/s0001.docx");
+    let path = section(&root, "s0001");
     wordcraft_engine::io::save_path(&path, &wordcraft_doc::Document::from_text("The first draft of the chapter.")).unwrap();
     let first = s.run("snapshot.take", &json!({"project": p, "id": "s0001", "label": "Sent to supervisor"})).unwrap();
     assert_eq!(first["words"], 6);
@@ -246,8 +251,8 @@ fn word_counts_follow_the_sections() {
     let mut s = session();
     let (root, p) = project(&mut s);
     let two = s.run("binder.add", &json!({"project": p})).unwrap()["id"].as_str().unwrap().to_string();
-    wordcraft_engine::io::save_path(&root.join("sections/s0001.docx"), &wordcraft_doc::Document::from_text("one two three")).unwrap();
-    wordcraft_engine::io::save_path(&root.join(format!("sections/{two}.docx")), &wordcraft_doc::Document::from_text("four five")).unwrap();
+    wordcraft_engine::io::save_path(&section(&root, "s0001"), &wordcraft_doc::Document::from_text("one two three")).unwrap();
+    wordcraft_engine::io::save_path(&section(&root, &two), &wordcraft_doc::Document::from_text("four five")).unwrap();
     assert_eq!(info(&mut s, &p)["words"], 5);
     assert!(root.join(".wcproj-cache.toml").is_file());
     s.run("binder.setMeta", &json!({"project": p, "id": two, "include": false})).unwrap();
@@ -261,7 +266,7 @@ fn word_counts_follow_the_sections() {
 fn opening_a_section_opens_its_document() {
     let mut s = session();
     let (root, p) = project(&mut s);
-    wordcraft_engine::io::save_path(&root.join("sections/s0001.docx"), &wordcraft_doc::Document::from_text("Chapter one text")).unwrap();
+    wordcraft_engine::io::save_path(&section(&root, "s0001"), &wordcraft_doc::Document::from_text("Chapter one text")).unwrap();
     s.run("binder.openItem", &json!({"project": p, "id": "s0001"})).unwrap();
     assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "Chapter one text");
 }
@@ -313,4 +318,99 @@ fn the_registry_has_the_engines_commands_and_these() {
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), n, "no command id twice");
+}
+
+/// Sections are saved under their titles, and renaming one renames its file; names Windows
+/// can't take are made safe, and two sections never share a file.
+#[test]
+fn section_files_are_named_by_their_titles() {
+    let mut s = session();
+    let (root, p) = project(&mut s);
+    assert!(root.join("sections/Untitled.docx").is_file());
+    let lit = s.run("binder.add", &json!({"project": p, "title": "Review of Literature"})).unwrap()["id"].as_str().unwrap().to_string();
+    assert!(root.join("sections/Review of Literature.docx").is_file());
+    let twin = s.run("binder.add", &json!({"project": p, "title": "Review of Literature"})).unwrap()["id"].as_str().unwrap().to_string();
+    assert!(root.join("sections/Review of Literature 2.docx").is_file(), "two sections never share a file");
+    wordcraft_engine::io::save_path(&section(&root, &lit), &wordcraft_doc::Document::from_text("Kept text")).unwrap();
+    s.run("binder.rename", &json!({"project": p, "id": lit, "title": "Literature: a review?"})).unwrap();
+    let renamed = root.join("sections/Literature- a review-.docx");
+    assert!(renamed.is_file() && !root.join("sections/Review of Literature.docx").exists(), "the file follows the title");
+    assert_eq!(wordcraft_engine::io::open_path(&renamed).unwrap().plain_text(wordcraft_doc::StoryRef::Body).trim(), "Kept text");
+    assert_eq!(info(&mut s, &p)["items"][1]["file"], "Literature- a review-.docx");
+    // Emptying the Trash removes a title-named file too.
+    s.run("binder.delete", &json!({"project": p, "id": twin})).unwrap();
+    s.run("binder.emptyTrash", &json!({"project": p})).unwrap();
+    assert!(!root.join("sections/Review of Literature 2.docx").exists());
+    // A project file naming a file outside sections/ is refused (recovery mode).
+    let text = std::fs::read_to_string(root.join(PROJECT_FILE)).unwrap().replace("file = \"Untitled.docx\"", "file = \"../../outside.docx\"");
+    std::fs::write(root.join(PROJECT_FILE), text).unwrap();
+    assert!(info(&mut s, &p)["recovered"].is_string());
+}
+
+#[test]
+fn file_names_are_safe() {
+    use crate::project::{file_name_for, valid_file_name};
+    let none = std::collections::HashSet::new();
+    assert_eq!(file_name_for("Chapter 1: Methods", &none), "Chapter 1- Methods.docx");
+    assert_eq!(file_name_for("   ", &none), "Untitled.docx");
+    assert_eq!(file_name_for("CON", &none), "CON section.docx");
+    assert_eq!(file_name_for("ends with dots...", &none), "ends with dots.docx");
+    assert_eq!(file_name_for(&"x".repeat(500), &none).chars().count(), 85);
+    for bad in ["../x.docx", "a/b.docx", "x.doc", ".docx", "NUL.docx", "a\u{0}.docx", ".hidden.docx"] {
+        assert!(!valid_file_name(bad), "{bad:?}");
+    }
+    assert!(valid_file_name("Review of Literature.docx"));
+}
+
+/// Recovery mode lists title-named files as sections too, with fresh ids.
+#[test]
+fn recovery_lists_title_named_files() {
+    let mut s = session();
+    let (root, p) = project(&mut s);
+    s.run("binder.add", &json!({"project": p, "title": "Methods"})).unwrap();
+    std::fs::write(root.join(PROJECT_FILE), "not toml [[[").unwrap();
+    let v = info(&mut s, &p);
+    let titles: Vec<&str> = v["items"].as_array().unwrap().iter().filter_map(|i| i["title"].as_str()).collect();
+    assert_eq!(titles, ["Methods", "Untitled"]);
+    s.run("binder.rename", &json!({"project": p, "id": v["items"][0]["id"], "title": "Method"})).unwrap();
+    assert!(root.join("sections/Method.docx").is_file());
+}
+
+/// Import splits a document at its Heading 1s, one section each titled by its heading; text
+/// before the first heading is a section of its own.
+#[test]
+fn import_splits_a_document_at_its_headings() {
+    let mut s = session();
+    let (root, p) = project(&mut s);
+    let mut d = Session::new(wordcraft_doc::Document::from_text("Preface text\nIntroduction\nIntro text\nMethods\nMethods text"));
+    for h in ["Introduction", "Methods"] {
+        d.run("select.text", &json!({"text": h})).unwrap();
+        d.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    }
+    let src = root.parent().unwrap().join("thesis draft.docx");
+    wordcraft_engine::io::save_path(&src, &d.doc).unwrap();
+    let r = s.run("binder.import", &json!({"project": p, "path": src.to_string_lossy()})).unwrap();
+    assert_eq!(r["ids"].as_array().unwrap().len(), 3, "{r}");
+    let v = info(&mut s, &p);
+    let titles: Vec<&str> = v["items"].as_array().unwrap().iter().filter_map(|i| i["title"].as_str()).collect();
+    assert_eq!(titles, ["Untitled", "thesis draft", "Introduction", "Methods"]);
+    let methods = wordcraft_engine::io::open_path(&root.join("sections/Methods.docx")).unwrap();
+    assert_eq!(methods.plain_text(wordcraft_doc::StoryRef::Body).trim(), "Methods\nMethods text");
+    assert!(s.run("binder.import", &json!({"project": p, "path": src.to_string_lossy(), "split": "chapters"})).is_err());
+}
+
+/// A document whose headings were typed ("1 Introduction") is split at them too: they become
+/// real headings first.
+#[test]
+fn import_finds_typed_headings() {
+    let mut s = session();
+    let (root, p) = project(&mut s);
+    let text =
+        "1 Introduction\nWe study kilns here, at length, in a paragraph that ends with a full stop.\n1.1 Aims\nAims text.\n2 Methods\nMethods text.";
+    let src = root.parent().unwrap().join("typed.docx");
+    wordcraft_engine::io::save_path(&src, &wordcraft_doc::Document::from_text(text)).unwrap();
+    let r = s.run("binder.import", &json!({"project": p, "path": src.to_string_lossy()})).unwrap();
+    assert!(r["converted"].as_u64().unwrap() >= 3, "{r}");
+    let titles: Vec<String> = info(&mut s, &p)["items"].as_array().unwrap().iter().filter_map(|i| i["title"].as_str().map(str::to_string)).collect();
+    assert_eq!(titles, ["Untitled", "Introduction", "Methods"], "split at the level-1 headings, numbers gone from the titles");
 }

@@ -29,6 +29,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("binder.add", "New Binder Item", LOC, add)
             .params(r#"{"project": folder, "kind"?: "section|folder" (default section), "title"?: string, "parent"?: folder id (default the top level), "index"?: n (default last), "role"?: string (contents, figures, tables, equations, bibliography or index: compile puts that generated list there)} → {"id"}: a section gets an empty document"#)
             .pure(),
+        CommandSpec::new("binder.import", "Import Document", LOC, import)
+            .params(r#"{"project": folder, "path": a document (any format WordCraft opens), "split"?: "heading1" (default) | "heading2" | "none", "parent"?: folder id} → {"ids": the new sections, "converted": typed headings turned into real ones}: one section per Heading 1 (or Heading 1 and 2), titled by its heading, the text before the first heading a section of its own. A document with no heading styles has its typed numbered headings ("1 Introduction", "2.1 Methods") made real first"#)
+            .pure(),
         CommandSpec::new("binder.move", "Move Binder Item", LOC, move_item)
             .params(r#"{"project": folder, "id", "parent"?: folder id | null (the top level), "index"?: n (default last)}"#)
             .pure(),
@@ -177,8 +180,10 @@ fn new(_: &mut Session, v: &Value) -> CmdResult {
     let title: String = p::str(v, "title").unwrap_or("Untitled project").chars().take(MAX_TEXT).collect();
     let mut pr = Project::create(Path::new(path), &title).map_err(fail)?;
     let id = pr.file.new_id().map_err(fail)?;
+    let mut item = Item::new(id.clone(), Kind::Section, "Untitled".into());
+    item.file = Some(crate::project::file_name_for("Untitled", &pr.taken_files(None)));
+    pr.file.items.push(item);
     new_section_file(&pr, &id)?;
-    pr.file.items.push(Item::new(id, Kind::Section, "Untitled".into()));
     pr.save().map_err(fail)?;
     info(&pr)
 }
@@ -196,7 +201,10 @@ fn item_json(i: &Item, cache: &mut Cache, pr: &Project, changed: &mut bool, dept
         "include": i.include,
     });
     match i.kind {
-        Kind::Section => o["words"] = json!(cache.words(pr, &i.id, changed)),
+        Kind::Section => {
+            o["words"] = json!(cache.words(pr, &i.id, changed));
+            o["file"] = json!(pr.section_file(&i.id));
+        }
         Kind::Folder if depth < crate::project::MAX_DEPTH => {
             o["children"] = Value::Array(i.children.iter().map(|c| item_json(c, cache, pr, changed, depth + 1)).collect());
         }
@@ -273,9 +281,12 @@ fn add(_: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Failed("the binder is full".into()));
     }
     let id = pr.file.new_id().map_err(fail)?;
-    let mut item = Item::new(id.clone(), kind, title);
+    let mut item = Item::new(id.clone(), kind, title.clone());
     if let Some(role) = text(v, "role")? {
         item.role = role;
+    }
+    if kind == Kind::Section {
+        item.file = Some(crate::project::file_name_for(&title, &pr.taken_files(None)));
     }
     binder::insert(&mut pr.file.items, parent.as_deref(), index, item).map_err(fail)?;
     // The file first: a binder entry never points at a file that wasn't made.
@@ -309,9 +320,31 @@ fn set_meta(_: &mut Session, v: &Value) -> CmdResult {
         Some(b) => Some(b.as_bool().ok_or_else(|| CmdError::Params("`include` is true or false".into()))?),
     };
     let numbering = numbering_rule(v)?;
+    // A section's file follows its title: renamed on disk first, so the binder never points at a
+    // file that isn't there.
+    let new_file = match (&title, binder::find(&pr.file.items, &id)) {
+        (Some(t), Some(i)) if i.kind == Kind::Section && &i.title != t => {
+            let name = crate::project::file_name_for(t, &pr.taken_files(Some(&id)));
+            let (from, to) = (pr.section_path(&id).map_err(fail)?, pr.root.join(crate::project::SECTIONS).join(&name));
+            if from != to {
+                wordcraft_engine::file_access::check_write(&to.to_string_lossy()).map_err(fail)?;
+                if to.exists() && !name.eq_ignore_ascii_case(&pr.section_file(&id)) {
+                    return Err(CmdError::Failed(format!("{name} is already in the sections folder")));
+                }
+                if from.exists() {
+                    std::fs::rename(&from, &to).map_err(|e| CmdError::Failed(format!("renaming the section's file: {e}")))?;
+                }
+            }
+            Some(name)
+        }
+        _ => None,
+    };
     let item = binder::find_mut(&mut pr.file.items, &id).ok_or_else(|| CmdError::Params(format!("no item {id:?}")))?;
     if let Some(n) = numbering {
         item.numbering = n;
+    }
+    if let Some(f) = new_file {
+        item.file = Some(f);
     }
     for (field, value) in
         [(&mut item.title, title), (&mut item.synopsis, synopsis), (&mut item.label, label), (&mut item.status, status), (&mut item.role, role)]
@@ -361,13 +394,15 @@ fn delete(_: &mut Session, v: &Value) -> CmdResult {
 
 fn empty_trash(_: &mut Session, v: &Value) -> CmdResult {
     let mut pr = open(v)?;
+    // The files, found while the items are still in the binder.
+    let paths: Vec<std::path::PathBuf> = binder::find(&pr.file.items, TRASH)
+        .map(|t| binder::sections(&t.children).into_iter().filter_map(|(i, _)| pr.section_path(&i.id).ok()).collect())
+        .unwrap_or_default();
     let removed = binder::empty_trash(&mut pr.file.items);
     // The binder first: a failed save leaves every file where it was.
     pr.save().map_err(fail)?;
-    for id in &removed {
-        if let Ok(path) = pr.section_path(id)
-            && wordcraft_engine::file_access::check_write(&path.to_string_lossy()).is_ok()
-        {
+    for path in paths {
+        if wordcraft_engine::file_access::check_write(&path.to_string_lossy()).is_ok() {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -404,4 +439,83 @@ fn compile_preview(s: &mut Session, v: &Value) -> CmdResult {
     let mut summary = summary;
     summary["document"] = json!(id);
     Ok(summary)
+}
+
+/// The heading level (0 = Heading 1) of a body paragraph, if it is a heading.
+fn heading_level(doc: &wordcraft_doc::Document, b: &wordcraft_doc::Block) -> Option<u8> {
+    let wordcraft_doc::Block::Para(p) = b else { return None };
+    doc.styles.resolve_para(&p.props).outline_level.filter(|l| *l < 9)
+}
+
+/// Most sections one import makes.
+const MAX_IMPORT_SECTIONS: usize = 2000;
+
+fn import(_: &mut Session, v: &Value) -> CmdResult {
+    let mut pr = open(v)?;
+    let path = p::req_str(v, "path")?;
+    let deepest: u8 = match p::str(v, "split").unwrap_or("heading1") {
+        "heading1" => 0,
+        "heading2" => 1,
+        "none" => u8::MAX,
+        x => return Err(CmdError::Params(format!("`split` is heading1, heading2 or none, not {:?}", x.chars().take(20).collect::<String>()))),
+    };
+    let parent = parent(&pr, v)?;
+    if parent.as_deref() == Some(TRASH) {
+        return Err(CmdError::Params("imported sections don't go in the Trash".into()));
+    }
+    wordcraft_engine::file_access::check_read(path).map_err(fail)?;
+    let doc = wordcraft_engine::io::open_path(Path::new(path)).map_err(fail)?;
+    let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("Imported").to_string();
+    // No heading at the split level: typed numbered headings become real ones first.
+    let mut converted = 0usize;
+    let doc = if deepest != u8::MAX && !doc.body.iter().any(|b| heading_level(&doc, b).is_some_and(|l| l <= deepest)) {
+        let mut s = Session::new(doc);
+        if let Ok(r) = s.run("numbering.convert", &json!({})) {
+            converted = r["converted"].as_array().map_or(0, Vec::len);
+        }
+        s.doc.clone()
+    } else {
+        doc
+    };
+    // The chunks: (title, blocks), split before each heading at the level or above.
+    let mut chunks: Vec<(String, wordcraft_doc::Blocks)> = Vec::new();
+    for b in &doc.body {
+        let starts = deepest != u8::MAX && heading_level(&doc, b).is_some_and(|l| l <= deepest);
+        if starts || chunks.is_empty() {
+            let title = if starts {
+                b.as_para().map(|p| p.plain_text().trim().chars().take(200).collect::<String>()).unwrap_or_default()
+            } else {
+                stem.clone()
+            };
+            chunks.push((if title.is_empty() { "Untitled".into() } else { title }, Vec::new()));
+        }
+        if let Some((_, blocks)) = chunks.last_mut() {
+            blocks.push(b.clone());
+        }
+    }
+    // Text before the first heading that is only empty paragraphs isn't a section.
+    chunks.retain(|(_, blocks)| blocks.iter().any(|b| b.as_para().is_none_or(|p| !p.plain_text().trim().is_empty() || !p.objects.is_empty())));
+    if chunks.len() > MAX_IMPORT_SECTIONS {
+        return Err(CmdError::Failed(format!(
+            "the document would make {} sections; at most {MAX_IMPORT_SECTIONS} are imported at once",
+            chunks.len()
+        )));
+    }
+    if binder::sections(&pr.file.items).len().saturating_add(chunks.len()) > crate::project::MAX_ITEMS {
+        return Err(CmdError::Failed("the binder would be too full".into()));
+    }
+    let mut ids = Vec::new();
+    for (title, blocks) in chunks {
+        let id = pr.file.new_id().map_err(fail)?;
+        let mut item = Item::new(id.clone(), Kind::Section, title.clone());
+        item.file = Some(crate::project::file_name_for(&title, &pr.taken_files(None)));
+        binder::insert(&mut pr.file.items, parent.as_deref(), None, item).map_err(fail)?;
+        // The whole document's styles, lists, notes and pictures, with this part's text.
+        let mut part = doc.clone();
+        part.body = blocks;
+        wordcraft_engine::io::save_path(&pr.section_path(&id).map_err(fail)?, &part).map_err(fail)?;
+        ids.push(id);
+    }
+    pr.save().map_err(fail)?;
+    Ok(json!({"ids": ids, "converted": converted}))
 }

@@ -34,7 +34,7 @@ pub struct ProjectUi {
     /// When `info` was read (egui time).
     refreshed: f64,
     /// An item being renamed, and the new title typed so far.
-    renaming: Option<(String, String)>,
+    pub(crate) renaming: Option<(String, String)>,
     /// Folders shown closed.
     collapsed: HashSet<String>,
     /// The last thing that went wrong, shown in the pane.
@@ -112,12 +112,32 @@ pub(crate) fn open_project(app: &mut WordApp, path: &str) -> Result<Value, Strin
         open_section(app, &first)?;
     }
     app.ui.backstage = false;
+    // Thesis mode starts on its own tab.
+    app.ui.tab = "Project".into();
     Ok(info)
 }
 
+/// Open the project that was open when WordCraft last closed, if it is still there. Returns
+/// whether one opened.
+pub fn reopen_last_project(app: &mut WordApp) -> bool {
+    let Some(path) = app.ui.last_project.clone() else { return false };
+    is_project_path(&path) && open_project(app, &path).is_ok()
+}
+
+/// Document extensions a Save dialog may have added to a new project's name.
+const DOCUMENT_EXTENSIONS: [&str; 8] = ["docx", "doc", "dotx", "odt", "rtf", "txt", "pdf", "md"];
+
 /// Make a project at `path` (`.wcproj` added when missing), open it and its first section.
 pub(crate) fn new_project(app: &mut WordApp, path: &str) -> Result<Value, String> {
-    let path = if path.ends_with(".wcproj") { path.to_string() } else { format!("{path}.wcproj") };
+    // A Save dialog adds its own extension ("My Thesis.wcproj.docx"): that goes first.
+    let mut path = path.to_string();
+    while let Some(ext) = Path::new(&path).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase) {
+        if !DOCUMENT_EXTENSIONS.contains(&ext.as_str()) {
+            break;
+        }
+        path.truncate(path.len() - ext.len() - 1);
+    }
+    let path = if path.ends_with(".wcproj") { path } else { format!("{path}.wcproj") };
     let title = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled project").to_string();
     app.session.run("project.new", &json!({"path": path, "title": title})).map_err(|e| e.to_string())?;
     open_project(app, &path)
@@ -139,18 +159,66 @@ fn first_section(items: &Value) -> Option<String> {
     None
 }
 
-/// The file of section `id` of the open project.
+/// Every section of a binder listing with its file name, depth first.
+fn section_files(items: &Value, out: &mut Vec<(String, String)>, depth: usize) {
+    if depth > wordcraft_manuscript::project::MAX_DEPTH {
+        return;
+    }
+    for i in items.as_array().into_iter().flatten() {
+        if i["kind"] == "section"
+            && let Some(id) = i["id"].as_str()
+        {
+            let file = i["file"].as_str().map_or_else(|| format!("{id}.docx"), str::to_string);
+            out.push((id.to_string(), file));
+        }
+        section_files(&i["children"], out, depth + 1);
+    }
+}
+
+/// The file of section `id` of the open project (named by its title; `<id>.docx` in older
+/// projects).
 fn section_path(app: &WordApp, id: &str) -> Option<PathBuf> {
-    let root = app.project.as_ref()?.root.clone();
-    wordcraft_manuscript::project::valid_id(id).then(|| Path::new(&root).join(wordcraft_manuscript::project::SECTIONS).join(format!("{id}.docx")))
+    let p = app.project.as_ref()?;
+    let mut all = Vec::new();
+    section_files(&p.info["items"], &mut all, 0);
+    let (_, file) = all.into_iter().find(|(i, _)| i == id)?;
+    wordcraft_manuscript::project::valid_file_name(&file).then(|| Path::new(&p.root).join(wordcraft_manuscript::project::SECTIONS).join(file))
+}
+
+/// The section of the open project a document's file is, if it is one.
+fn section_of(app: &WordApp, path: &Path) -> Option<String> {
+    let p = app.project.as_ref()?;
+    let dir = Path::new(&p.root).join(wordcraft_manuscript::project::SECTIONS);
+    if path.parent()? != dir {
+        return None;
+    }
+    let name = path.file_name()?.to_str()?;
+    let mut all = Vec::new();
+    section_files(&p.info["items"], &mut all, 0);
+    all.into_iter().find(|(_, f)| f.eq_ignore_ascii_case(name)).map(|(id, _)| id)
 }
 
 /// The section of the open project shown in the window, if it is one.
 pub(crate) fn current_section(app: &WordApp) -> Option<String> {
-    let root = PathBuf::from(&app.project.as_ref()?.root);
-    let path = app.session.path.as_ref()?;
-    let id = path.file_stem()?.to_str()?;
-    (path.parent()? == root.join(wordcraft_manuscript::project::SECTIONS)).then(|| id.to_string())
+    section_of(app, app.session.path.as_ref()?)
+}
+
+/// Close the open documents that are other sections of the project, saved: thesis mode edits
+/// one section at a time in the window, as moving through a binder does.
+fn close_other_sections(app: &mut WordApp) {
+    let others: Vec<u64> = app
+        .session
+        .documents()
+        .into_iter()
+        .filter(|d| !d.active && !d.dirty && d.path.as_deref().is_some_and(|path| section_of(app, path).is_some()))
+        .map(|d| d.id)
+        .collect();
+    for id in others {
+        if let Err(e) = app.session.close_document(id) {
+            log::warn!("closing section document {id}: {e}");
+        }
+    }
+    app.sync_document();
 }
 
 /// Show section `id`: the section being left is saved first when it has changes, then the
@@ -160,7 +228,13 @@ pub(crate) fn open_section(app: &mut WordApp, id: &str) -> Result<Value, String>
     if current_section(app).is_some() && app.document_unsaved() {
         app.run("file.save", json!({}))?;
     }
+    // Opening a document goes to Home; thesis mode keeps the tab the writer is on.
+    let tab = app.ui.tab.clone();
     let r = app.open_file(&path.to_string_lossy(), None);
+    if r.is_ok() {
+        close_other_sections(app);
+        app.ui.tab = tab;
+    }
     if let Some(p) = app.project.as_mut() {
         p.selected = Some(id.to_string());
     }
@@ -181,6 +255,10 @@ pub(crate) fn command(app: &mut WordApp, id: &str, params: &Value) -> Option<Res
         "ui.project.open" => match path {
             Some(p) => open_project(app, &p),
             None => asked(app.ask_file(FileDialogRequest::Open { purpose: "project".into() }, AfterPick::OpenProject)),
+        },
+        "ui.project.import" => match path {
+            Some(p) => import_document(app, &p),
+            None => asked(app.ask_file(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::ImportDocument)),
         },
         "ui.project.close" => {
             app.project = None;
@@ -267,6 +345,24 @@ pub(crate) fn command(app: &mut WordApp, id: &str, params: &Value) -> Option<Res
         },
         _ => Err(format!("unknown command {id}")),
     })
+}
+
+/// Import the document at `path` into the project, split at its headings (into the picked
+/// folder, else at the end), and show its first new section.
+pub(crate) fn import_document(app: &mut WordApp, path: &str) -> Result<Value, String> {
+    let parent = app.project.as_ref().and_then(|p| {
+        let id = p.selected.as_deref()?;
+        locate(&p.info["items"], id, None)
+            .filter(|(i, _, _)| i["kind"] == "folder" && i["id"] != wordcraft_manuscript::project::TRASH)
+            .map(|_| id.to_string())
+    });
+    let r = project_run(app, "binder.import", json!({"path": path, "parent": parent}))?;
+    let n = r["ids"].as_array().map_or(0, Vec::len);
+    app.status(crate::i18n::fmt(tl!("Imported {n} sections"), &[("n", &n.to_string())]));
+    if let Some(first) = r["ids"].get(0).and_then(Value::as_str) {
+        open_section(app, first)?;
+    }
+    Ok(r)
 }
 
 /// Save the section open in the window when it has changes, so compiling reads what's there.
@@ -505,12 +601,16 @@ fn tree(ui: &mut Ui, items: &Value, parent: Option<&str>, depth: usize, cx: &Ctx
                     if r.changed() {
                         ui.data_mut(|d| d.insert_temp(key, draft.clone()));
                     }
-                    if !r.has_focus() && !r.lost_focus() {
+                    // Focus once, when renaming starts: the writer can click elsewhere to finish.
+                    let asked = egui::Id::unique(("binder_rename_focus", id));
+                    if !ui.data(|d| d.get_temp::<bool>(asked).unwrap_or(false)) {
                         r.request_focus();
+                        ui.data_mut(|d| d.insert_temp(asked, true));
                     }
                     if r.lost_focus() {
                         t = draft.trim().to_string();
                         ui.data_mut(|d| d.remove::<String>(key));
+                        ui.data_mut(|d| d.remove::<bool>(egui::Id::unique(("binder_rename_focus", id))));
                         *todo = Some(Do::Rename(id.to_string(), if t.is_empty() { title.clone() } else { t }));
                     }
                     return;

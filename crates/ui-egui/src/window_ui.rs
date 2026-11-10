@@ -304,6 +304,7 @@ impl WordApp {
             styles_pane_width: _,
             pane_places: _,
             pane_order: _,
+            last_project: _,
             // Per window.
             tab,
             backstage,

@@ -60,6 +60,10 @@ pub struct Item {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_words: Option<u64>,
+    /// A section's file in `sections/`, named from its title (`Introduction.docx`); none for
+    /// projects made before titles named files, whose sections are `<id>.docx`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
     /// How its pages are numbered when compiled (inherited by what a folder holds).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub numbering: Option<NumberingRule>,
@@ -88,6 +92,7 @@ impl Item {
             status: String::new(),
             role: String::new(),
             target_words: None,
+            file: None,
             numbering: None,
             include: true,
             children: Vec::new(),
@@ -211,6 +216,7 @@ pub fn valid_id(id: &str) -> bool {
 /// caps, sections without children, texts within [`MAX_TEXT`].
 pub fn validate(file: &ProjectFile) -> Result<(), String> {
     let mut seen = std::collections::HashSet::new();
+    let mut files = std::collections::HashSet::new();
     let mut stack: Vec<(&Item, usize)> = file.items.iter().map(|i| (i, 1)).collect();
     while let Some((item, depth)) = stack.pop() {
         if depth > MAX_DEPTH {
@@ -227,6 +233,14 @@ pub fn validate(file: &ProjectFile) -> Result<(), String> {
         }
         if item.kind == Kind::Section && !item.children.is_empty() {
             return Err(format!("section {:?} has items inside it", item.id));
+        }
+        if let Some(f) = &item.file {
+            if !valid_file_name(f) {
+                return Err(format!("item {:?} has a file name that can't be used: {:?}", item.id, truncate(f, 60)));
+            }
+            if !files.insert(f.to_lowercase()) {
+                return Err(format!("file {:?} is used by two items", truncate(f, 60)));
+            }
         }
         for t in [&item.title, &item.synopsis, &item.label, &item.status, &item.role] {
             if t.chars().count() > MAX_TEXT {
@@ -311,17 +325,58 @@ fn nesting(text: &str) -> usize {
 
 /// The section ids that have a file in `sections/`, sorted (for recovery mode).
 fn section_files(root: &Path) -> Vec<String> {
-    let mut ids: Vec<String> = std::fs::read_dir(root.join(SECTIONS))
+    let mut names: Vec<String> = std::fs::read_dir(root.join(SECTIONS))
         .map(|rd| {
             rd.filter_map(Result::ok)
-                .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".docx")).map(str::to_string))
-                .filter(|id| valid_id(id))
+                .filter_map(|e| e.file_name().to_str().map(str::to_string))
+                .filter(|n| valid_file_name(n))
                 .take(MAX_ITEMS)
                 .collect()
         })
         .unwrap_or_default();
-    ids.sort();
-    ids
+    names.sort();
+    names
+}
+
+/// Whether `name` can be a section's file name in `sections/`: a `.docx` name of at most 120
+/// characters, with no folder in it and nothing Windows refuses.
+pub fn valid_file_name(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".docx") else { return false };
+    let n = name.chars().count();
+    (6..=120).contains(&n)
+        && !stem.trim().is_empty()
+        && !stem.starts_with('.')
+        && !stem.ends_with(['.', ' '])
+        && !name.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        && !reserved_name(stem)
+}
+
+/// Windows' reserved device names (`CON`, `NUL`, `COM1`…), which can't name a file there.
+fn reserved_name(stem: &str) -> bool {
+    let base = stem.split('.').next().unwrap_or("").trim().to_ascii_uppercase();
+    matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((base.starts_with("COM") || base.starts_with("LPT"))
+            && base.len() == 4
+            && base.as_bytes().get(3).is_some_and(|b| (b'1'..=b'9').contains(b)))
+}
+
+/// A file name for a section titled `title`: the title with the characters files can't have
+/// replaced, `.docx` added, and ` 2`, ` 3`… when `taken` (lowercase names) has it already.
+pub fn file_name_for(title: &str, taken: &std::collections::HashSet<String>) -> String {
+    let cleaned: String =
+        title.chars().map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '-' } else { c }).collect();
+    let mut stem: String = cleaned.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
+    stem = stem.trim_matches(|c: char| c == '.' || c == ' ').to_string();
+    if stem.is_empty() || reserved_name(&stem) {
+        stem = if stem.is_empty() { "Untitled".into() } else { format!("{stem} section") };
+    }
+    for n in 1..=MAX_ITEMS {
+        let name = if n == 1 { format!("{stem}.docx") } else { format!("{stem} {n}.docx") };
+        if valid_file_name(&name) && !taken.contains(&name.to_lowercase()) {
+            return name;
+        }
+    }
+    format!("section {}.docx", taken.len())
 }
 
 impl Project {
@@ -343,11 +398,21 @@ impl Project {
             Err(why) => {
                 // Recovery mode: every section with a file, in id order.
                 let mut file = ProjectFile::new(root.file_stem().and_then(|s| s.to_str()).unwrap_or("Recovered project"));
-                for id in section_files(root) {
-                    file.items.push(Item::new(id.clone(), Kind::Section, id));
-                }
-                let highest = file.items.iter().filter_map(|i| i.id.strip_prefix('s')).filter_map(|n| n.parse::<u64>().ok()).max().unwrap_or(0);
+                let names = section_files(root);
+                // Files named by an id keep it; the others get new ids after the highest.
+                let stems: Vec<&str> = names.iter().filter_map(|n| n.strip_suffix(".docx")).collect();
+                let highest =
+                    stems.iter().filter(|s| valid_id(s)).filter_map(|i| i.strip_prefix('s')).filter_map(|n| n.parse::<u64>().ok()).max().unwrap_or(0);
                 file.next_id = highest.saturating_add(1);
+                for (name, stem) in names.iter().zip(stems.iter()) {
+                    if valid_id(stem) {
+                        file.items.push(Item::new((*stem).to_string(), Kind::Section, (*stem).to_string()));
+                    } else if let Ok(id) = file.new_id() {
+                        let mut item = Item::new(id, Kind::Section, (*stem).to_string());
+                        item.file = Some(name.clone());
+                        file.items.push(item);
+                    }
+                }
                 Ok(Project { root: root.to_path_buf(), file, recovered: Some(why) })
             }
         }
@@ -388,6 +453,21 @@ impl Project {
         if !valid_id(id) {
             return Err(format!("{id:?} isn't an item id"));
         }
-        Ok(self.root.join(SECTIONS).join(format!("{id}.docx")))
+        Ok(self.root.join(SECTIONS).join(self.section_file(id)))
+    }
+
+    /// Section `id`'s file name in `sections/`: its own, else `<id>.docx`.
+    pub fn section_file(&self, id: &str) -> String {
+        crate::binder::find(&self.file.items, id).and_then(|i| i.file.clone()).filter(|f| valid_file_name(f)).unwrap_or_else(|| format!("{id}.docx"))
+    }
+
+    /// The file names the binder's sections use (lowercase), but `except`'s.
+    pub fn taken_files(&self, except: Option<&str>) -> std::collections::HashSet<String> {
+        // The Trash's sections too: their files are still there.
+        crate::binder::sections(&self.file.items)
+            .into_iter()
+            .filter(|(i, _)| Some(i.id.as_str()) != except)
+            .map(|(i, _)| self.section_file(&i.id).to_lowercase())
+            .collect()
     }
 }
