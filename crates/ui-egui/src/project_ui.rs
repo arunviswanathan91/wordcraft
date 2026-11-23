@@ -845,7 +845,7 @@ fn page_numbers_menu(ui: &mut Ui, id: &str, rule: &Value, todo: &mut Option<Do>)
     }
     ui.separator();
     // Start at N from here.
-    let key = egui::Id::new(("binder_page_start", id));
+    let key = egui::Id::unique(("binder_page_start", id));
     let mut n = ui.data(|d| d.get_temp::<u32>(key)).unwrap_or_else(|| rule["start"].as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(1));
     crate::widgets::row(ui, |ui| {
         ui.label(tl!("Start at"));
