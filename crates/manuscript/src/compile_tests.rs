@@ -401,3 +401,172 @@ fn check_finds_what_isnt_finished() {
     assert_eq!(r["ok"], false, "{r}");
     assert!(!root.parent().unwrap().join("thesis.pdf").exists(), "a check writes nothing");
 }
+
+/// The item ids of a `project.info` (or `project.new`) answer by title.
+fn ids_by_title(info: &Value) -> std::collections::HashMap<String, String> {
+    fn walk(items: &Value, out: &mut std::collections::HashMap<String, String>) {
+        for i in items.as_array().into_iter().flatten() {
+            if let (Some(id), Some(title)) = (i["id"].as_str(), i["title"].as_str()) {
+                out.insert(title.to_string(), id.to_string());
+            }
+            walk(&i["children"], out);
+        }
+    }
+    let mut out = std::collections::HashMap::new();
+    walk(&info["items"], &mut out);
+    out
+}
+
+/// Type `text` (a line feed is Enter) at the end of the file of the section titled `title`.
+fn type_into(p: &str, root: &Path, info: &Value, title: &str, text: &str) {
+    let id = ids_by_title(info)[title].clone();
+    let file = crate::project::Project::open(root).unwrap().section_path(&id).unwrap();
+    let mut s = Session::new(wordcraft_engine::io::open_path(&file).unwrap());
+    s.run("caret.docEnd", &json!({})).unwrap();
+    // Key by key, as a person types: Enter and the space after a word do what they do in the app.
+    for c in text.chars() {
+        if c == '\n' {
+            s.run("text.newParagraph", &json!({})).unwrap();
+        } else {
+            s.run("text.insert", &json!({"text": c.to_string()})).unwrap();
+        }
+    }
+    wordcraft_engine::io::save_path(&file, &s.doc).unwrap();
+    let _ = p;
+}
+
+#[test]
+fn a_thesis_from_the_template_numbers_itself_and_compiles() {
+    let mut s = session();
+    let root = scratch().join("My Thesis.wcproj");
+    let p = root.to_string_lossy().to_string();
+    let info = s.run("project.new", &json!({"path": p, "title": "Ink and Iron", "template": "thesis"})).unwrap();
+    let ids = ids_by_title(&info);
+    for title in [
+        "Front matter",
+        "Title page",
+        "Abstract",
+        "Contents",
+        "List of Figures",
+        "Chapters",
+        "Introduction",
+        "Methods",
+        "Conclusion",
+        "References",
+        "Appendix A",
+    ] {
+        assert!(ids.contains_key(title), "{title} is in the binder");
+    }
+    assert_eq!(info["first"], json!(ids["Introduction"]), "writing starts in the first chapter");
+    // Each chapter's file shows its own number.
+    let outline = s.run("project.outline", &json!({"project": p})).unwrap();
+    let shown: Vec<String> = outline["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|sec| sec["outline"]["headings"].as_array().cloned().unwrap_or_default())
+        .map(|h| format!("{} {}", h["number"].as_str().unwrap_or("-"), h["text"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            "- Declaration",
+            "- Abstract",
+            "- Acknowledgements",
+            "- Abbreviations",
+            "1 Introduction",
+            "2 Literature Review",
+            "3 Methods",
+            "4 Results",
+            "5 Discussion",
+            "6 Conclusion",
+            "- Appendix A"
+        ]
+    );
+    // Writing: sections, figures and a table typed with their numbers.
+    type_into(
+        &p,
+        &root,
+        &info,
+        "Methods",
+        "3.1 Sampling\nFigure 3.1: Sites. Where the cores were taken.\n3.2 Analysis\nTable 3.1: Reagents\nFigure 3.2: Workflow\n",
+    );
+    type_into(&p, &root, &info, "Results", "4.1 Yield\nFigure 4.1: Yield by site\nSee Figure 4.1 for the yields.\n");
+    let outline = s.run("project.outline", &json!({"project": p})).unwrap();
+    let figures: Vec<String> = outline["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|sec| sec["outline"]["figures"].as_array().cloned().unwrap_or_default())
+        .map(|f| f["label"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(figures, ["Figure 3.1", "Figure 3.2", "Figure 4.1"]);
+    // Results moves before Methods: compiling numbers by the new order.
+    let chapters = ids["Chapters"].clone();
+    s.run("binder.move", &json!({"project": p, "id": ids["Results"], "parent": chapters, "index": 2})).unwrap();
+    let doc = crate::compile::compile(
+        &crate::project::Project::open(&root).unwrap(),
+        &crate::compile::presets(&crate::project::Project::open(&root).unwrap()).unwrap()[0],
+    )
+    .unwrap()
+    .doc;
+    let o = Session::new(doc.clone()).run("structure.outline", &json!({})).unwrap();
+    let headings: Vec<String> = o["headings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|h| h["number"].as_str().map(|n| format!("{n} {}", h["text"].as_str().unwrap())))
+        .collect();
+    assert_eq!(
+        headings,
+        [
+            "1 Introduction",
+            "2 Literature Review",
+            "3 Results",
+            "3.1 Yield",
+            "4 Methods",
+            "4.1 Sampling",
+            "4.2 Analysis",
+            "5 Discussion",
+            "6 Conclusion"
+        ]
+    );
+    let figures: Vec<&str> = o["figures"].as_array().unwrap().iter().map(|f| f["label"].as_str().unwrap()).collect();
+    assert_eq!(figures, ["Figure 3.1", "Figure 4.1", "Figure 4.2"]);
+    assert_eq!(o["tables"][0]["label"], "Table 4.1");
+    let texts = body_texts(&doc);
+    // The reference followed its figure, and the lists are filled in.
+    assert!(texts.iter().any(|t| t == "See Figure 3.1 for the yields."), "{texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("Figure 4.1: Sites") && t.ends_with(char::is_numeric)), "list of figures: {texts:?}");
+    assert!(texts.iter().any(|t| t.starts_with("Table 4.1: Reagents") && t.ends_with(char::is_numeric)), "list of tables: {texts:?}");
+    assert!(texts.iter().any(|t| t == "Ink and Iron"));
+}
+
+#[test]
+fn a_book_from_the_template_counts_chapters_in_words() {
+    let mut s = session();
+    let root = scratch().join("Book.wcproj");
+    let p = root.to_string_lossy().to_string();
+    let info = s.run("project.new", &json!({"path": p, "title": "The Long Road", "template": "book"})).unwrap();
+    assert!(s.run("project.new", &json!({"path": scratch().join("x.wcproj").to_string_lossy(), "template": "nope"})).is_err());
+    let outline = s.run("project.outline", &json!({"project": p})).unwrap();
+    let shown: Vec<String> = outline["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|sec| sec["outline"]["headings"].as_array().cloned().unwrap_or_default())
+        .filter_map(|h| h["number"].as_str().map(|n| format!("{n} {}", h["text"].as_str().unwrap())))
+        .collect();
+    assert_eq!(shown, ["Chapter 1 Chapter One", "Chapter 2 Chapter Two", "Chapter 3 Chapter Three"]);
+    // A new section starts from the same base: a chapter typed in it is numbered like the others.
+    let id = s.run("binder.add", &json!({"project": p, "title": "Four", "parent": ids_by_title(&info)["Manuscript"]})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let info = s.run("project.info", &json!({"project": p})).unwrap();
+    type_into(&p, &root, &info, "Four", "Chapter 4: Home Again\n");
+    let outline = s.run("project.outline", &json!({"project": p, "skip": "none"})).unwrap();
+    let four = outline["sections"].as_array().unwrap().iter().find(|x| x["id"] == json!(id)).unwrap();
+    assert_eq!(four["outline"]["headings"][0]["number"], "Chapter 4");
+    assert_eq!(four["outline"]["headings"][0]["text"], "Home Again");
+}

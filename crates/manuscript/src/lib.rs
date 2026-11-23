@@ -19,6 +19,7 @@ mod commands;
 pub mod compile;
 pub mod project;
 pub mod snapshot;
+pub mod template;
 
 use std::sync::Arc;
 

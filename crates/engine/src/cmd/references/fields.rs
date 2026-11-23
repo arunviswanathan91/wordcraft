@@ -153,6 +153,34 @@ pub fn heal_seq_pins(s: &mut Session) -> Result<usize, CmdError> {
     Ok(dropped)
 }
 
+/// Take the `\r n` reset off every unlocked `SEQ` field of the body: each caption shows the number
+/// its place gives it. Returns how many fields changed.
+pub fn strip_seq_resets(s: &mut Session) -> Result<usize, CmdError> {
+    let mut n = 0usize;
+    for path in s.doc.para_paths(StoryRef::Body) {
+        let has = s.doc.para(StoryRef::Body, &path).is_some_and(|p| {
+            p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, locked: false, .. } if FieldCode::parse(instr).name == "SEQ" && strip_reset(instr) != *instr))
+        });
+        if !has {
+            continue;
+        }
+        let para = s.doc.para_mut(StoryRef::Body, &path)?;
+        for o in para.objects.iter_mut() {
+            if let InlineObject::Field { instr, locked: false, .. } = o
+                && FieldCode::parse(instr).name == "SEQ"
+            {
+                let stripped = strip_reset(instr);
+                if stripped != *instr {
+                    *instr = stripped;
+                    n += 1;
+                }
+            }
+        }
+        para.touch();
+    }
+    Ok(n)
+}
+
 /// `instr` without its `\r n` switch.
 fn strip_reset(instr: &str) -> String {
     let mut out: Vec<&str> = Vec::new();

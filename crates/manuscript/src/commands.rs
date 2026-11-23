@@ -18,10 +18,13 @@ const LOC: &str = "Project";
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("project.new", "New Project", LOC, new)
-            .params(r#"{"path": folder to make (must not exist, or be empty), "title"?: string} → project.info's answer: the folder, project.toml, sections/, snapshots/, research/ and one empty section"#)
+            .params(r#"{"path": folder to make (must not exist, or be empty), "title"?: string, "author"?: string, "template"?: "blank" (default: one empty section) | "thesis" (front matter, six chapters, references, an appendix) | "book" (front matter, three chapters, back matter)} → project.info's answer and "first": the section to open: the folder, project.toml, sections/, snapshots/, research/ and the template's sections, each starting from the project's base document (heading styles numbered 1 / 1.1 / 1.1.1, or "Chapter 1" for a book)"#)
             .pure(),
         CommandSpec::new("project.info", "Project Info", LOC, |_, v| info(&open(v)?))
             .params(r#"{"project": folder} → {"title", "author", "targets", "recovered": why project.toml couldn't be used (the binder then lists every section file) | null, "words": included sections' total, "items": [{"id", "kind": "folder|section", "title", "synopsis", "label", "status", "role", "target", "include", "words" (sections), "children" (folders)}]}"#)
+            .pure(),
+        CommandSpec::new("project.outline", "Project Outline", LOC, outline)
+            .params(r#"{"project": folder, "skip"?: section id (left out: the one open in the editor, whose outline is the live document's)} → {"sections": [{"id", "title", "role", "outline": structure.outline's answer for the section's file | null (skipped, or unreadable)}]}: the headings, appendices, figures, tables and equations of every included section, in binder order. Each file is read once and again only when it changes"#)
             .pure(),
         CommandSpec::new("project.setMetadata", "Project Properties", LOC, set_metadata)
             .params(r#"{"project": folder, "title"?: string, "author"?: string, "projectWords"?: n | null, "sessionWords"?: n | null, "deadline"?: "YYYY-MM-DD" | null}"#)
@@ -169,7 +172,10 @@ fn index(v: &Value) -> Result<Option<usize>, CmdError> {
 /// An empty section document at `id`'s path.
 fn new_section_file(pr: &Project, id: &str) -> Result<(), CmdError> {
     let path = pr.section_path(id).map_err(fail)?;
-    wordcraft_engine::io::save_path(&path, &wordcraft_doc::Document::new()).map_err(fail)
+    // The project's base document: its heading styles carry the heading list, so a heading typed
+    // with its number is numbered like the other sections'.
+    let doc = crate::template::base_document(crate::template::chapter_word(pr)).map_err(fail)?;
+    wordcraft_engine::io::save_path(&path, &doc).map_err(fail)
 }
 
 fn new(_: &mut Session, v: &Value) -> CmdResult {
@@ -178,14 +184,28 @@ fn new(_: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Params("`path` is empty".into()));
     }
     let title: String = p::str(v, "title").unwrap_or("Untitled project").chars().take(MAX_TEXT).collect();
+    let template = p::str(v, "template").unwrap_or("blank");
+    if !crate::template::TEMPLATES.contains(&template) {
+        return Err(CmdError::Params(format!("`template` is blank, thesis or book, not {:?}", template.chars().take(20).collect::<String>())));
+    }
     let mut pr = Project::create(Path::new(path), &title).map_err(fail)?;
-    let id = pr.file.new_id().map_err(fail)?;
-    let mut item = Item::new(id.clone(), Kind::Section, "Untitled".into());
-    item.file = Some(crate::project::file_name_for("Untitled", &pr.taken_files(None)));
-    pr.file.items.push(item);
-    new_section_file(&pr, &id)?;
+    if let Some(author) = text(v, "author")? {
+        pr.file.author = author;
+    }
+    let first = if template == "blank" {
+        let id = pr.file.new_id().map_err(fail)?;
+        let mut item = Item::new(id.clone(), Kind::Section, "Untitled".into());
+        item.file = Some(crate::project::file_name_for("Untitled", &pr.taken_files(None)));
+        pr.file.items.push(item);
+        new_section_file(&pr, &id)?;
+        Some(id)
+    } else {
+        crate::template::fill(&mut pr, template).map_err(fail)?
+    };
     pr.save().map_err(fail)?;
-    info(&pr)
+    let mut r = info(&pr)?;
+    r["first"] = json!(first);
+    Ok(r)
 }
 
 fn item_json(i: &Item, cache: &mut Cache, pr: &Project, changed: &mut bool, depth: usize) -> Value {
@@ -447,6 +467,52 @@ fn heading_level(doc: &wordcraft_doc::Document, b: &wordcraft_doc::Block) -> Opt
     doc.styles.resolve_para(&p.props).outline_level.filter(|l| *l < 9)
 }
 
+/// A section file's outline as last read: the file's modification time and size, and the answer.
+type Outlined = (std::time::SystemTime, u64, Value);
+
+/// The outlines read so far, by file: a project's files are read once, and again only when they
+/// change. Bounded: when it is full it is emptied.
+static OUTLINES: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, Outlined>>> = std::sync::Mutex::new(None);
+const MAX_OUTLINES: usize = 4000;
+
+/// `structure.outline` for the section file at `path`.
+fn file_outline(path: &Path) -> Option<Value> {
+    let meta = std::fs::metadata(path).ok()?;
+    let key = (meta.modified().ok()?, meta.len());
+    if let Ok(guard) = OUTLINES.lock()
+        && let Some((m, l, v)) = guard.as_ref().and_then(|c| c.get(path))
+        && (*m, *l) == key
+    {
+        return Some(v.clone());
+    }
+    wordcraft_engine::file_access::check_read(&path.to_string_lossy()).ok()?;
+    let doc = wordcraft_engine::io::open_path(path).ok()?;
+    let v = Session::new(doc).run("structure.outline", &json!({})).ok()?;
+    if let Ok(mut guard) = OUTLINES.lock() {
+        let cache = guard.get_or_insert_with(Default::default);
+        if cache.len() >= MAX_OUTLINES {
+            cache.clear();
+        }
+        cache.insert(path.to_path_buf(), (key.0, key.1, v.clone()));
+    }
+    Some(v)
+}
+
+fn outline(_: &mut Session, v: &Value) -> CmdResult {
+    let pr = open(v)?;
+    let skip = p::str(v, "skip");
+    let sections: Vec<Value> = binder::sections(&pr.file.items)
+        .into_iter()
+        .filter(|(_, on)| *on)
+        .map(|(i, _)| {
+            let generated = crate::compile::GENERATED.contains(&i.role.as_str());
+            let outline = if generated || skip == Some(i.id.as_str()) { None } else { pr.section_path(&i.id).ok().and_then(|p| file_outline(&p)) };
+            json!({"id": i.id, "title": i.title, "role": i.role, "outline": outline})
+        })
+        .collect();
+    Ok(json!({"sections": sections}))
+}
+
 /// Most sections one import makes.
 const MAX_IMPORT_SECTIONS: usize = 2000;
 
@@ -466,17 +532,23 @@ fn import(_: &mut Session, v: &Value) -> CmdResult {
     wordcraft_engine::file_access::check_read(path).map_err(fail)?;
     let doc = wordcraft_engine::io::open_path(Path::new(path)).map_err(fail)?;
     let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("Imported").to_string();
-    // No heading at the split level: typed numbered headings become real ones first.
+    // No heading at the split level: typed numbered headings become real ones first. Then what
+    // else was typed as structure (headings with their numbers, appendices, "Figure 2.1: …"
+    // captions) becomes the real thing, and floating pictures are set in line, where no later
+    // edit can move them.
     let mut converted = 0usize;
-    let doc = if deepest != u8::MAX && !doc.body.iter().any(|b| heading_level(&doc, b).is_some_and(|l| l <= deepest)) {
-        let mut s = Session::new(doc);
-        if let Ok(r) = s.run("numbering.convert", &json!({})) {
-            converted = r["converted"].as_array().map_or(0, Vec::len);
-        }
-        s.doc.clone()
-    } else {
-        doc
-    };
+    let mut s = Session::new(doc);
+    if deepest != u8::MAX
+        && !s.doc.body.iter().any(|b| heading_level(&s.doc, b).is_some_and(|l| l <= deepest))
+        && let Ok(r) = s.run("numbering.convert", &json!({}))
+    {
+        converted = r["converted"].as_array().map_or(0, Vec::len);
+    }
+    if let Ok(r) = s.run("structure.convert", &json!({})) {
+        converted = converted.saturating_add(r["converted"].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(0));
+    }
+    let settled = s.run("structure.settleFigures", &json!({})).ok().and_then(|r| r["settled"].as_u64()).unwrap_or(0);
+    let doc = s.doc.clone();
     // The chunks: (title, blocks), split before each heading at the level or above.
     let mut chunks: Vec<(String, wordcraft_doc::Blocks)> = Vec::new();
     for b in &doc.body {
@@ -517,5 +589,5 @@ fn import(_: &mut Session, v: &Value) -> CmdResult {
         ids.push(id);
     }
     pr.save().map_err(fail)?;
-    Ok(json!({"ids": ids, "converted": converted}))
+    Ok(json!({"ids": ids, "converted": converted, "settled": settled}))
 }

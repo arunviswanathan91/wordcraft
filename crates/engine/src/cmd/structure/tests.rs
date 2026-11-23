@@ -232,6 +232,25 @@ fn lists_of_figures_and_tables_show_the_bold_heading() {
 }
 
 #[test]
+fn renumber_lets_typed_numbers_go() {
+    // A chapter file typed as chapter 3, with a figure typed with another chapter's number.
+    let mut s = typed(
+        "3 Results
+Figure 5.4: Early
+3.1 Yield
+Figure 3.7: Late
+7 Discussion
+",
+    );
+    assert_eq!(headings(&mut s), ["3 Results", "3.1 Yield", "7 Discussion"]);
+    assert_eq!(captions(&mut s, "figures"), ["Figure 5.4|Early", "Figure 3.7|Late"]);
+    let r = run(&mut s, "structure.renumber", json!({}));
+    assert!(r["headings"].as_u64().unwrap() >= 1);
+    assert_eq!(headings(&mut s), ["1 Results", "1.1 Yield", "2 Discussion"]);
+    assert_eq!(captions(&mut s, "figures"), ["Figure 1.1|Early", "Figure 1.2|Late"]);
+}
+
+#[test]
 fn undo_brings_the_typed_line_back() {
     let mut s = typed("2.1 Sampling\n");
     assert_eq!(headings(&mut s), ["2.1 Sampling"]);

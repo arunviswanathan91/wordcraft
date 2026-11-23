@@ -52,6 +52,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("structure.list", "List of Figures or Tables", "References › Captions", list).params(
             r#"{"of"?: "figures" (default) | "tables" | "equations" | a caption label of your own, "heading"?: bool (default true: a heading above the list) | string (the heading's text), "titles"?: "bold" (default: each entry shows the caption's heading, its part in bold; the whole caption when nothing in it is bold) | "full" (the whole caption), "includeLabel"?: bool (default true: "Figure 2.1" before the text), "pageNumbers"?: bool, "tabLeader"?: "dot|hyphen|underscore|none"} → {"entries": n}: inserted at the caret; References › Update Table refreshes it"#,
         ),
+        CommandSpec::new("structure.renumber", "Renumber by Position", "References › Captions", renumber).params(
+            r#"{} → {"headings": n, "captions": n}: every heading and caption takes the number its place gives it: numbers pinned by typing them are let go, and a caption's typed chapter part ("4." of Figure 4.2) becomes the chapter's own number. Compiling a project does this to the joined document. One undo step"#,
+        ),
         CommandSpec::new("structure.update", "Update Numbers", "References › Captions", |s, _| {
             update_numbers(s)?;
             Ok(outline(s))
@@ -312,6 +315,44 @@ pub fn update_numbers(s: &mut Session) -> Result<(), CmdError> {
     crate::cmd::references::update_refs(s)
 }
 
+/// `structure.renumber`.
+fn renumber(s: &mut Session, _: &Value) -> CmdResult {
+    let headings = typed::unpin_all(s)?;
+    let chapters = numbered_headings(s).iter().any(|(_, level, number, _)| *level == 1 && number.is_some());
+    let mut changed = 0usize;
+    if chapters {
+        for c in captions(s) {
+            let Some((a, b)) = c.literal else { continue };
+            let para = s.doc.para_mut(StoryRef::Body, &Path::top(c.k))?;
+            let sep = match para.text.get(a..b).and_then(|t| t.chars().next_back()) {
+                Some('-') => "-",
+                Some('.') => ".",
+                _ => "",
+            };
+            let props = para.props_at(a).clone().without_symbol();
+            para.delete(a, b)?;
+            if !sep.is_empty() {
+                para.insert_text(a, sep, &props)?;
+            }
+            para.insert_object(a, field("STYLEREF 1 \\s".into()), &props)?;
+            for o in para.objects.iter_mut() {
+                if let InlineObject::Field { instr, .. } = o
+                    && FieldCode::parse(instr).name == "SEQ"
+                    && !FieldCode::parse(instr).has('s')
+                {
+                    instr.push_str(" \\s 1");
+                }
+            }
+            para.touch();
+            changed += 1;
+        }
+    }
+    changed += crate::cmd::references::strip_seq_resets(s)?;
+    s.clamp_selection();
+    update_numbers(s)?;
+    Ok(json!({"headings": headings, "captions": changed}))
+}
+
 /// One caption of the body.
 struct Caption {
     k: usize,
@@ -326,6 +367,8 @@ struct Caption {
     title: Option<String>,
     /// Where the number starts and ends in the paragraph's own text (bytes, fields as objects).
     span: (usize, usize),
+    /// A chapter part typed as text before the number ("4." of a pinned Figure 4.2).
+    literal: Option<(usize, usize)>,
 }
 
 /// The captions among the body's top-level paragraphs: those holding a `SEQ` field.
@@ -387,7 +430,16 @@ fn captions(s: &Session) -> Vec<Caption> {
         let text =
             part(to, p.text.len()).trim_start_matches([':', '.', ' ', '\u{a0}', '-', '\u{2013}', '\u{2014}', '|']).trim().chars().take(200).collect();
         let title = caption_entry(&s.doc, p, true);
-        out.push(Caption { k, id, label: label.trim().to_string(), number, text, title, span: (from, to) });
+        out.push(Caption {
+            k,
+            id,
+            label: label.trim().to_string(),
+            number,
+            text,
+            title,
+            span: (from, to),
+            literal: (from < first && first == seq_at).then_some((from, first)),
+        });
     }
     out
 }

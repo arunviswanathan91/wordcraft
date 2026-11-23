@@ -843,14 +843,44 @@ fn generate(s: &mut Session, ph: &Placeholder) -> Result<(), String> {
     s.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(ph.at, 0));
     let (id, params) = match ph.role.as_str() {
         "contents" => ("references.toc", json!({"title": ph.title})),
-        "figures" => ("references.tableOfFigures", json!({"label": "Figure"})),
-        "tables" => ("references.tableOfFigures", json!({"label": "Table"})),
-        "equations" => ("references.tableOfFigures", json!({"label": "Equation"})),
+        // Each entry shows its caption's heading (the part in bold) when it has one.
+        "figures" => ("structure.list", json!({"of": "figures", "heading": false})),
+        "tables" => ("structure.list", json!({"of": "tables", "heading": false})),
+        "equations" => ("structure.list", json!({"of": "equations", "heading": false})),
         "bibliography" => ("references.bibliography", json!({"title": ph.title})),
         "index" => ("references.index", json!({})),
         _ => return Ok(()),
     };
     s.run(id, &params).map(|_| ()).map_err(|e| format!("{} ({}): {e}", ph.title, ph.role))
+}
+
+/// The headings of generated lists take no chapter number: a paragraph in the TOC Heading style,
+/// and a heading that holds a list's field (the bibliography's, the index's), is taken off the
+/// heading list, which its style would otherwise number it with ("7 References").
+fn unnumber_generated_headings(s: &mut Session) {
+    let generated: Vec<usize> = s
+        .doc
+        .body
+        .iter()
+        .enumerate()
+        .filter_map(|(k, b)| {
+            let p = b.as_para()?;
+            let toc_heading =
+                p.props.style.as_deref().is_some_and(|st| st == "TOCHeading" || s.doc.styles.chain(st).iter().any(|x| x.id == "TOCHeading"));
+            let holds_list = p.objects.iter().filter_map(field_instr).any(|i| {
+                let t = i.trim_start().to_ascii_uppercase();
+                t.starts_with("BIBLIOGRAPHY") || t.starts_with("INDEX") || t.starts_with("TOC")
+            });
+            let numbered = s.doc.styles.resolve_para(&p.props).numbering.is_some_and(|n| n.num != 0);
+            ((toc_heading || holds_list) && numbered).then_some(k)
+        })
+        .collect();
+    for k in generated {
+        if let Ok(p) = s.doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(k)) {
+            p.props.numbering = Some(wordcraft_doc::props::NumRef { num: 0, level: 0 });
+            p.touch();
+        }
+    }
 }
 
 /// Join, then fill in and update what the whole document generates: the lists the binder's
@@ -885,7 +915,11 @@ pub fn compile(project: &Project, preset: &Preset) -> Result<Compiled, String> {
             warnings.push(format!("table of contents: {e}"));
         }
     }
+    unnumber_generated_headings(&mut s);
     let _ = s.run("numbering.repair", &json!({"kinds": ["otherList", "restart"]}));
+    // Numbers typed in the section files (a chapter file that starts at 3, "Figure 3.2") give way
+    // to the ones the joined document's order gives.
+    let _ = s.run("structure.renumber", &json!({}));
     if let Err(e) = s.run("references.updateFields", &json!({"all": true})) {
         warnings.push(format!("updating fields: {e}"));
     }

@@ -306,6 +306,16 @@ fn pin(s: &mut Session, sc: Scheme, k: usize, lv: u8, parts: &[u32]) -> Result<(
 /// number is what the heading list would give it anyway goes back to the heading list. Returns
 /// how many were removed.
 pub(crate) fn heal(s: &mut Session) -> Result<usize, CmdError> {
+    unpin(s, false)
+}
+
+/// Take every pin away: each heading shows the number its place gives it.
+pub(crate) fn unpin_all(s: &mut Session) -> Result<usize, CmdError> {
+    unpin(s, true)
+}
+
+/// [`heal`], or with `all` every pin whatever number it holds.
+fn unpin(s: &mut Session, all: bool) -> Result<usize, CmdError> {
     let hs = headings(s);
     let Some(sc) = scheme(s, &hs) else { return Ok(0) };
     let numbering = s.doc.numbering.clone();
@@ -324,7 +334,7 @@ pub(crate) fn heal(s: &mut Session) -> Result<usize, CmdError> {
             let natural = plain.next_label(&numbering, sc.num, n.level).map(|(l, _)| l);
             let mut with = counters.clone();
             let pinned_label = with.next_label(&numbering, n.num, n.level).map(|(l, _)| l);
-            if natural.is_some() && natural == pinned_label {
+            if natural.is_some() && (all || natural == pinned_label) {
                 // The style numbers it when the style is on the heading list; else directly.
                 let direct = by_style.is_none_or(|b| b.num != sc.num).then_some(NumRef { num: sc.num, level: n.level });
                 redundant.push((k, direct));
