@@ -30,7 +30,7 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
     }
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
-        for (k, l) in [("headings", "Headings"), ("pages", "Pages"), ("results", "Results")] {
+        for (k, l) in [("headings", "Headings"), ("figures", "Figures"), ("tables", "Tables"), ("pages", "Pages"), ("results", "Results")] {
             if ui.selectable_label(app.ui.nav_tab == k, tl!(l)).clicked() {
                 app.ui.nav_tab = k.into();
             }
@@ -44,6 +44,34 @@ pub(super) fn nav(app: &mut WordApp, ui: &mut Ui) {
                 let label = crate::i18n::fmt(tl!("Page {page}"), &[("page", &p.number.to_string())]);
                 if ui.selectable_label(app.session.page_hint == i, label).clicked() {
                     let _ = app.run("edit.goto", json!({"page": i + 1}));
+                }
+            }
+        }
+        // The document's figures or tables, by their captions: a click goes to one.
+        kind @ ("figures" | "tables") => {
+            let o = wordcraft_engine::cmd::structure::outline(&app.session);
+            let items = o[kind].as_array().cloned().unwrap_or_default();
+            if items.is_empty() {
+                let hint = if kind == "figures" {
+                    tl!("No figures yet.\n\nType a caption such as “Figure 2.1: Cell counts” on a line of its own and press Enter.")
+                } else {
+                    tl!("No tables yet.\n\nType a caption such as “Table 3.1: Reagents” on a line of its own and press Enter.")
+                };
+                ui.label(egui::RichText::new(hint).weak());
+            }
+            let caret = app.session.sel.focus.path.0.first().copied().unwrap_or(0) as u64;
+            for c in items {
+                let block = c["path"].get(0).and_then(serde_json::Value::as_u64).unwrap_or(0);
+                let label = c["label"].as_str().unwrap_or("");
+                let text = c["title"].as_str().or(c["text"].as_str()).unwrap_or("");
+                let text = if text.is_empty() { label.to_string() } else { format!("{label}  {text}") };
+                let (_, r) = nav_heading(ui, 0, &text, block == caret, None);
+                if r.clicked() {
+                    let path = Path::top(usize::try_from(block).unwrap_or(0));
+                    let _ = app.run("caret.set", json!({"pos": Pos { story: StoryRef::Body, path, off: 0 }}));
+                    app.canvas.nav_to_caret = true;
+                    app.canvas.scroll_to_caret = false;
+                    app.canvas.want_focus = true;
                 }
             }
         }

@@ -81,8 +81,9 @@ pub(crate) enum AfterPick {
     ForDialog,
     /// Put the picked document into the Compare dialog (original or revised, #412).
     ComparePath { revised: bool },
-    /// Make a manuscript project in the picked folder (thesis mode).
-    NewProject,
+    /// Make a manuscript project in the picked folder from the named template (blank, thesis,
+    /// book).
+    NewProject(String),
     /// Open the manuscript project whose `project.toml` was picked (thesis mode).
     OpenProject,
     /// Compile the open manuscript project to the picked file (thesis mode).
@@ -258,9 +259,9 @@ impl WordApp {
                 self.ui.backstage = false;
                 r
             }
-            AfterPick::NewProject => {
+            AfterPick::NewProject(template) => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
-                crate::project_ui::new_project(self, &path)
+                crate::project_ui::new_project(self, &path, &template)
             }
             AfterPick::OpenProject => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };

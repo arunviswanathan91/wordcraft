@@ -39,11 +39,27 @@ pub struct ProjectUi {
     collapsed: HashSet<String>,
     /// The last thing that went wrong, shown in the pane.
     pub error: Option<String>,
+    /// `project.outline`'s last answer: every section's headings, figures and tables, but the
+    /// open section's (that one is read from the document as it is being written).
+    pub outline: Value,
+    /// What the pane lists: "binder", "outline", "figures", "tables" or "appendices".
+    pub view: String,
 }
 
 impl ProjectUi {
     fn new(root: String, info: Value) -> Self {
-        ProjectUi { root, info, selected: None, binder: true, refreshed: f64::NEG_INFINITY, renaming: None, collapsed: HashSet::new(), error: None }
+        ProjectUi {
+            root,
+            info,
+            selected: None,
+            binder: true,
+            refreshed: f64::NEG_INFINITY,
+            renaming: None,
+            collapsed: HashSet::new(),
+            error: None,
+            outline: Value::Null,
+            view: "binder".into(),
+        }
     }
 }
 
@@ -65,6 +81,16 @@ pub(crate) fn project_run(app: &mut WordApp, id: &str, params: Value) -> Result<
 pub(crate) fn refresh(app: &mut WordApp) {
     let Some(root) = app.project.as_ref().map(|p| p.root.clone()) else { return };
     let now = app.ctx.as_ref().map_or(0.0, |c| c.input(|i| i.time));
+    // The structure lists are read only while one of them is shown.
+    let listing = app.project.as_ref().is_some_and(|p| p.view != "binder");
+    if listing {
+        let skip = current_section(app);
+        if let Ok(o) = app.session.run("project.outline", &json!({"project": root, "skip": skip}))
+            && let Some(p) = app.project.as_mut()
+        {
+            p.outline = o;
+        }
+    }
     match app.session.run("project.info", &json!({"project": root})) {
         Ok(info) => {
             if let Some(p) = app.project.as_mut() {
@@ -127,8 +153,9 @@ pub fn reopen_last_project(app: &mut WordApp) -> bool {
 /// Document extensions a Save dialog may have added to a new project's name.
 const DOCUMENT_EXTENSIONS: [&str; 8] = ["docx", "doc", "dotx", "odt", "rtf", "txt", "pdf", "md"];
 
-/// Make a project at `path` (`.wcproj` added when missing), open it and its first section.
-pub(crate) fn new_project(app: &mut WordApp, path: &str) -> Result<Value, String> {
+/// Make a project at `path` (`.wcproj` added when missing) from `template` (blank, thesis or
+/// book), open it and the section writing starts in.
+pub(crate) fn new_project(app: &mut WordApp, path: &str, template: &str) -> Result<Value, String> {
     // A Save dialog adds its own extension ("My Thesis.wcproj.docx"): that goes first.
     let mut path = path.to_string();
     while let Some(ext) = Path::new(&path).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase) {
@@ -139,8 +166,15 @@ pub(crate) fn new_project(app: &mut WordApp, path: &str) -> Result<Value, String
     }
     let path = if path.ends_with(".wcproj") { path } else { format!("{path}.wcproj") };
     let title = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled project").to_string();
-    app.session.run("project.new", &json!({"path": path, "title": title})).map_err(|e| e.to_string())?;
-    open_project(app, &path)
+    let made = app.session.run("project.new", &json!({"path": path, "title": title, "template": template})).map_err(|e| e.to_string())?;
+    let r = open_project(app, &path)?;
+    // A template's project starts in its first chapter, not on its title page.
+    if template != "blank"
+        && let Some(first) = made["first"].as_str()
+    {
+        open_section(app, first)?;
+    }
+    Ok(r)
 }
 
 /// The first section of a binder listing, depth first (the Trash's aren't).
@@ -248,9 +282,37 @@ pub(crate) fn command(app: &mut WordApp, id: &str, params: &Value) -> Option<Res
     }
     let path = params.get("path").and_then(Value::as_str).map(str::to_string);
     Some(match id {
-        "ui.project.new" => match path {
-            Some(p) => new_project(app, &p),
-            None => asked(app.ask_file(FileDialogRequest::Save { name: tl!("My Thesis").to_string() + ".wcproj", dir: None }, AfterPick::NewProject)),
+        "ui.project.new" => {
+            let template = params.get("template").and_then(Value::as_str).filter(|t| matches!(*t, "thesis" | "book")).unwrap_or("blank");
+            match path {
+                Some(p) => new_project(app, &p, template),
+                None => {
+                    let name = if template == "book" { tl!("My Book") } else { tl!("My Thesis") };
+                    asked(
+                        app.ask_file(
+                            FileDialogRequest::Save { name: name.to_string() + ".wcproj", dir: None },
+                            AfterPick::NewProject(template.into()),
+                        ),
+                    )
+                }
+            }
+        }
+        // Show a place in the project: the section opens when it isn't the one shown.
+        "ui.project.goto" => {
+            let block = params.get("block").and_then(Value::as_u64).unwrap_or(0);
+            match params.get("id").and_then(Value::as_str) {
+                Some(sid) => goto(app, sid, block),
+                None => Err("`id` is required".into()),
+            }
+        }
+        "ui.project.view" => match app.project.as_mut() {
+            Some(p) => {
+                let view = params.get("view").and_then(Value::as_str).unwrap_or("binder");
+                p.view = if VIEWS.iter().any(|(v, _)| *v == view) { view.into() } else { "binder".into() };
+                p.refreshed = f64::NEG_INFINITY;
+                Ok(json!({"view": p.view}))
+            }
+            None => Err(tl!("No project is open.").into()),
         },
         "ui.project.open" => match path {
             Some(p) => open_project(app, &p),
@@ -345,6 +407,144 @@ pub(crate) fn command(app: &mut WordApp, id: &str, params: &Value) -> Option<Res
         },
         _ => Err(format!("unknown command {id}")),
     })
+}
+
+/// The lists the Binder pane shows.
+const VIEWS: [(&str, &str); 5] =
+    [("binder", "Binder"), ("outline", "Outline"), ("figures", "Figures"), ("tables", "Tables"), ("appendices", "Appendices")];
+
+/// Put the caret at the start of body block `block` of section `id`, opening the section when
+/// another is shown, and bring it into view.
+fn goto(app: &mut WordApp, id: &str, block: u64) -> Result<Value, String> {
+    if current_section(app).as_deref() != Some(id) {
+        open_section(app, id)?;
+    }
+    let last = app.session.doc.body.len().saturating_sub(1) as u64;
+    let pos = wordcraft_doc::Pos::body(usize::try_from(block.min(last)).unwrap_or(0), 0);
+    let r = app.run("caret.set", json!({"pos": pos}));
+    app.canvas.nav_to_caret = true;
+    app.canvas.scroll_to_caret = false;
+    app.canvas.want_focus = true;
+    r
+}
+
+/// One line of a structure list: the section it is in, its block there, how deep it is indented
+/// and what it says.
+struct Entry {
+    section: String,
+    block: u64,
+    level: u8,
+    text: String,
+    /// Typed as structure but still plain text: Detect Structure makes it real.
+    typed: bool,
+}
+
+/// The lines of structure list `view` for the whole project, in binder order: the open section's
+/// from the document being written, the others' from their files.
+fn entries(app: &WordApp, view: &str) -> Vec<Entry> {
+    let Some(p) = app.project.as_ref() else { return Vec::new() };
+    let current = current_section(app);
+    let live = current.as_ref().map(|_| wordcraft_engine::cmd::structure::outline(&app.session));
+    let mut out = Vec::new();
+    for sec in p.outline["sections"].as_array().into_iter().flatten() {
+        let Some(id) = sec["id"].as_str() else { continue };
+        let o = if current.as_deref() == Some(id) { live.as_ref() } else { Some(&sec["outline"]) };
+        let Some(o) = o.filter(|o| o.is_object()) else { continue };
+        let block = |v: &Value| v["path"].get(0).and_then(Value::as_u64).unwrap_or(0);
+        match view {
+            "figures" | "tables" => {
+                for c in o[view].as_array().into_iter().flatten() {
+                    let label = c["label"].as_str().unwrap_or("");
+                    let text = c["title"].as_str().or(c["text"].as_str()).unwrap_or("");
+                    let text = if text.is_empty() { label.to_string() } else { format!("{label}  {text}") };
+                    out.push(Entry { section: id.into(), block: block(c), level: 0, text, typed: false });
+                }
+                let want = if view == "figures" { "Fig" } else { "Tab" };
+                for t in o["typed"].as_array().into_iter().flatten().filter(|t| t["kind"] == "caption") {
+                    let text = t["text"].as_str().unwrap_or("");
+                    if text.starts_with(want) {
+                        out.push(Entry { section: id.into(), block: block(t), level: 0, text: text.into(), typed: true });
+                    }
+                }
+            }
+            _ => {
+                let mut in_appendix = false;
+                for h in o["headings"].as_array().into_iter().flatten() {
+                    let level = u8::try_from(h["level"].as_u64().unwrap_or(1)).unwrap_or(1).clamp(1, 9);
+                    let appendix = h["appendix"] == true;
+                    if level == 1 {
+                        in_appendix = appendix;
+                    }
+                    if view == "appendices" && !(appendix || in_appendix) {
+                        continue;
+                    }
+                    let text = h["text"].as_str().unwrap_or("");
+                    let text = match h["number"].as_str() {
+                        Some(n) => format!("{n}  {text}"),
+                        None => text.to_string(),
+                    };
+                    out.push(Entry { section: id.into(), block: block(h), level: level - 1, text, typed: false });
+                }
+                if view == "outline" {
+                    for t in o["typed"].as_array().into_iter().flatten().filter(|t| t["kind"] != "caption") {
+                        out.push(Entry { section: id.into(), block: block(t), level: 0, text: t["text"].as_str().unwrap_or("").into(), typed: true });
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A structure list in the Binder pane: every heading, figure, table or appendix of the project;
+/// a click goes there.
+fn structure_list(app: &mut WordApp, ui: &mut Ui, view: &str) {
+    let list = entries(app, view);
+    let current = current_section(app);
+    let caret = app.session.sel.focus.path.0.first().copied().unwrap_or(0) as u64;
+    let mut go: Option<(String, u64)> = None;
+    let mut detect = false;
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        if list.is_empty() {
+            let hint = match view {
+                "figures" => tl!("No figures yet.\n\nType a caption such as “Figure 2.1: Cell counts” on a line of its own and press Enter: it is numbered, listed here and kept with its picture."),
+                "tables" => tl!("No tables yet.\n\nType a caption such as “Table 3.1: Reagents” on a line of its own and press Enter: it is numbered and listed here."),
+                "appendices" => tl!("No appendices yet.\n\nType “Appendix A” on a line of its own and press Enter."),
+                _ => tl!("No headings yet.\n\nType a heading with its number, such as “2.1 Methods”, and press Enter: it becomes a numbered heading and is listed here."),
+            };
+            ui.label(egui::RichText::new(hint).weak());
+        }
+        // The line the caret is under: the last one at or before it in the open section.
+        let here = list.iter().rposition(|e| current.as_deref() == Some(e.section.as_str()) && e.block <= caret);
+        for (i, e) in list.iter().enumerate() {
+            crate::widgets::row(ui, |ui| {
+                ui.add_space(f32::from(e.level) * 12.0);
+                let mut text = egui::RichText::new(e.text.as_str()).font(if e.level == 0 && view != "figures" && view != "tables" { semibold(12.5) } else { regular(12.5) });
+                if e.typed {
+                    text = text.italics().weak();
+                }
+                let width = ui.available_width();
+                let r = ui.add(egui::Button::selectable(here == Some(i), (text, egui::Atom::grow())).wrap().min_size(egui::vec2(width, ui.spacing().interact_size.y)));
+                let r = if e.typed { r.on_hover_text(tl!("Typed as text. Detect Structure makes it a real heading or caption.")) } else { r };
+                if r.clicked() {
+                    go = Some((e.section.clone(), e.block));
+                }
+            });
+        }
+        if list.iter().any(|e| e.typed) {
+            ui.add_space(6.0);
+            detect = ui.button(tl!("Detect Structure")).on_hover_text(tl!("Make the lines typed as headings and captions real ones in this section")).clicked();
+        }
+    });
+    if let Some((id, block)) = go {
+        let r = goto(app, &id, block);
+        if let (Err(e), Some(p)) = (r, app.project.as_mut()) {
+            p.error = Some(e);
+        }
+    }
+    if detect {
+        let _ = app.run("structure.convert", json!({}));
+    }
 }
 
 /// Import the document at `path` into the project, split at its headings (into the picked
@@ -503,7 +703,25 @@ pub fn binder(app: &mut WordApp, ui: &mut Ui) {
             todo = Some(Do::Snapshot);
         }
     });
+    // What the pane lists: the binder, or the project's structure.
+    let view = p.view.clone();
+    let mut pick: Option<&str> = None;
+    ui.horizontal_wrapped(|ui| {
+        for (k, label) in VIEWS {
+            if ui.selectable_label(view == k, tl!(label)).clicked() {
+                pick = Some(k);
+            }
+        }
+    });
     ui.separator();
+    if let Some(k) = pick {
+        let _ = app.run("ui.project.view", json!({"view": k}));
+        return;
+    }
+    if view != "binder" {
+        structure_list(app, ui, &view);
+        return;
+    }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         tree(
             ui,

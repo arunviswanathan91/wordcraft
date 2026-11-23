@@ -5,7 +5,9 @@ use super::{Ui, WordApp, big, group, json};
 
 pub(super) fn project(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Project", None, app, |ui, app| {
-        big(ui, app, "coverPage", "New\nProject", "ui.project.new", json!({}), false);
+        big(ui, app, "coverPage", "New\nThesis", "ui.project.new", json!({"template": "thesis"}), false);
+        big(ui, app, "documentTemplate", "New\nBook", "ui.project.new", json!({"template": "book"}), false);
+        big(ui, app, "blankPage", "New\nProject", "ui.project.new", json!({}), false);
         big(ui, app, "open", "Open\nProject", "ui.project.open", json!({}), false);
         big(ui, app, "close", "Close\nProject", "ui.project.close", json!({}), false);
     });
@@ -15,6 +17,13 @@ pub(super) fn project(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "object", "Import\nDocument", "ui.project.import", json!({}), false);
         let shown = app.project.as_ref().is_some_and(|p| p.binder);
         crate::widgets::big_toggle(ui, app, "navPane", "Binder", "ui.project.binder", shown);
+    });
+    group(ui, "Structure", None, app, |ui, app| {
+        big(ui, app, "multilevel", "Detect\nStructure", "structure.convert", json!({}), false);
+        big(ui, app, "tableOfFigures", "List of\nFigures", "structure.list", json!({"of": "figures"}), false);
+        big(ui, app, "tableOfFigures", "List of\nTables", "structure.list", json!({"of": "tables"}), false);
+        big(ui, app, "picture", "Keep Figures\nin Place", "structure.settleFigures", json!({}), false);
+        big(ui, app, "numbering", "Renumber", "structure.renumber", json!({}), false);
     });
     group(ui, "Compile", None, app, |ui, app| {
         big(ui, app, "checkErrors", "Check", "ui.project.check", json!({}), false);

@@ -7741,3 +7741,61 @@ fn thesis_mode_is_one_editor_with_a_binder() {
     assert_eq!(b.project.as_ref().unwrap().info["title"], "My Thesis");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A thesis from the template: writing starts in the Introduction; a heading, a figure and a
+/// table typed with their numbers show in the Binder pane's Outline, Figures and Tables lists
+/// for the whole project; a click on a line of another chapter opens that chapter there.
+#[test]
+fn a_thesis_lists_its_structure_and_goes_to_it() {
+    use egui_kittest::kittest::Queryable;
+    let dir = std::env::temp_dir().join(format!("wc-thesis-structure-{}-{}", std::process::id(), wordcraft_engine::cmd::now_unix()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = dir.join("Ink and Iron.wcproj");
+    let mut a = app();
+    a.run("ui.project.new", json!({"path": root.to_string_lossy(), "template": "thesis"})).unwrap();
+    let intro = crate::project_ui::current_section(&a).unwrap();
+    assert_eq!(a.session.doc.body[0].as_para().unwrap().text, "Introduction", "writing starts in the first chapter");
+    // Typed key by key, as at the keyboard.
+    a.run("caret.docEnd", json!({})).unwrap();
+    for c in "1.1 Background\nFigure 1.1: Old presses\nTable 1.1: Type metals\n".chars() {
+        if c == '\n' {
+            a.run("text.newParagraph", json!({})).unwrap();
+        } else {
+            a.run("text.insert", json!({"text": c.to_string()})).unwrap();
+        }
+    }
+    a.run("ui.project.view", json!({"view": "outline"})).unwrap();
+    let mut h = harness(a);
+    for _ in 0..4 {
+        h.step();
+    }
+    for line in ["1  Introduction", "1.1  Background", "3  Methods", "6  Conclusion", "Appendix A"] {
+        assert!(h.query_by_label(line).is_some(), "the outline lists {line:?}");
+    }
+    // Another chapter's line: its section opens.
+    h.get_by_label("3  Methods").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    let methods = crate::project_ui::current_section(h.state()).unwrap();
+    assert_ne!(methods, intro);
+    assert_eq!(h.state().session.doc.body[0].as_para().unwrap().text, "Methods");
+    // What was typed in the Introduction was saved on the way, and is still listed.
+    h.state_mut().run("ui.project.view", json!({"view": "figures"})).unwrap();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(h.query_by_label("Figure 1.1  Old presses").is_some(), "the figure of the chapter left is listed");
+    h.state_mut().run("ui.project.view", json!({"view": "tables"})).unwrap();
+    for _ in 0..4 {
+        h.step();
+    }
+    h.get_by_label("Table 1.1  Type metals").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!(crate::project_ui::current_section(h.state()).as_deref(), Some(intro.as_str()), "the table's chapter is open again");
+    let k = h.state().session.sel.focus.path.0[0] as usize;
+    assert!(h.state().session.doc.body[k].as_para().unwrap().plain_text().starts_with("Table 1.1"), "with the caret at the table's caption");
+    let _ = std::fs::remove_dir_all(&dir);
+}

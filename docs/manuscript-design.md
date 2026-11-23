@@ -1,6 +1,6 @@
 # Manuscript projects: design
 
-> **Last updated:** 2026-11-07 · **Status:** proposal, nothing implemented. Describes a
+> **Last updated:** 2026-11-23 · **Status:** in progress: milestones 0–2 mostly done, the app now starts thesis-first (see the revision history). Describes a
 > project-based manuscript and thesis workflow: each chapter or section is its own document,
 > several are edited in one window as a continuous stack, and compile joins them into one DOCX,
 > PDF or LaTeX file, or into chosen parts such as the front pages or each chapter. Page
@@ -1003,6 +1003,7 @@ maintainers.
 
 | Date | Change |
 |---|---|
+| 2026-11-23 | Thesis first, at the owner's request. Structure as you type (headings, appendices, captions and figure references typed with their numbers become real ones; the typed number wins until the numbering catches up; see [typing-parity.md](typing-parity.md)), instead of the planned rule that a typed number is only ever removed. `structure.outline`, `structure.convert`, `structure.settleFigures`, `structure.renumber`, `structure.list` (lists of figures and tables that can show each caption's bold heading only). Project templates (`project.new` with `thesis` or `book`), every section from one base document that carries the heading list; `project.outline`; import detects structure and sets floating pictures in line; compile renumbers by position and leaves generated headings unnumbered. The start screen offers New Thesis, New Book and Open Project first; the Binder pane lists the whole project's Outline, Figures, Tables and Appendices; the Navigation pane lists a document's figures and tables. Still to do: the stacked editor, uncounted pages, export sets, cross-references between sections, references to headings typed in the text, Zotero refresh at compile |
 | 2026-11-08 | From first use: one section at a time in the editor, files named by section title (`file` in `[[item]]`), `binder.import` with typed-heading detection, the last project reopened |
 | 2026-11-08 | Milestone 2: roles and generated items, numbering zones, per-chapter captions, figure normalisation, compile.check |
 | 2026-11-08 | Milestone 2 started: compile pipeline, presets, Compile on the Project tab |

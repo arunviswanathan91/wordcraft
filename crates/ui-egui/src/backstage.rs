@@ -377,6 +377,31 @@ fn home_page(app: &mut WordApp, ui: &mut Ui) {
             "Good evening"
         },
     );
+    // Writing a thesis or a book comes first: a project of sections that compile into one
+    // document.
+    ui.label(egui::RichText::new(tl!("Start a long piece of writing")).font(medium(15.0)));
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
+        for (label, hint, cmd, params) in [
+            (
+                "New Thesis",
+                "Front matter, chapters, references and an appendix, numbered as you type",
+                "ui.project.new",
+                serde_json::json!({"template": "thesis"}),
+            ),
+            ("New Book", "Front matter, chapters and back matter", "ui.project.new", serde_json::json!({"template": "book"})),
+            ("Open Project", "Open a thesis or book project folder", "ui.project.open", serde_json::json!({})),
+        ] {
+            let b = egui::Button::new(egui::RichText::new(tl!(label)).font(medium(14.0))).min_size(vec2(132.0, 40.0));
+            if ui.add(b).on_hover_text(tl!(hint)).clicked() {
+                let _ = app.run(cmd, params);
+            }
+        }
+    });
+    ui.add_space(20.0);
+    ui.label(egui::RichText::new(tl!("Or a single document")).font(medium(15.0)));
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(18.0, 0.0);
         for (label, template) in TEMPLATES.into_iter().take(HOME_TEMPLATES) {
