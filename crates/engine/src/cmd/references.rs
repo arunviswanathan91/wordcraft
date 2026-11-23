@@ -18,8 +18,8 @@ mod toc;
 
 use fields::caption;
 pub use fields::{
-    CHAPTER_SEPARATORS, REFERENCE_NOT_FOUND, heal_seq_pins, output_fields, refresh_date_fields, seq_format, strip_seq_resets, update_fields,
-    update_fields_in, update_refs, update_seq,
+    CHAPTER_SEPARATORS, REFERENCE_NOT_FOUND, heal_seq_pins, output_fields, paragraph_number, refresh_date_fields, seq_format, strip_seq_resets,
+    update_fields, update_fields_in, update_refs, update_seq,
 };
 pub(super) use notes::note_options;
 use notes::{note, note_refs};

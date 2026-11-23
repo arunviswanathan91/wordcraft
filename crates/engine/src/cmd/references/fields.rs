@@ -98,10 +98,43 @@ pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
 }
 
 /// Refresh the body's `REF` fields from the bookmarks they point at, as output does
-/// ([`output_fields`]): a reference to a caption's number shows the number it has now.
+/// ([`output_fields`]): a reference to a caption's number shows the number it has now, and a
+/// reference to a heading's number (`REF … \w`) the number the heading has now.
 pub fn update_refs(s: &mut Session) -> Result<(), CmdError> {
     let refs = changed(&s.doc, ref_results(&s.doc, &s.doc));
-    apply_results(&mut s.doc, refs)
+    apply_results(&mut s.doc, refs)?;
+    let numbers = changed(&s.doc, number_ref_results(&s.doc));
+    apply_results(&mut s.doc, numbers)
+}
+
+/// The number the paragraph at `target` shows in full ("2.1"), as a `REF … \w` to it reads.
+pub fn paragraph_number(doc: &wordcraft_doc::Document, target: &Path) -> Option<String> {
+    ref_number(&para_numbers(doc), target, None, 'w')
+}
+
+/// The fresh results of the body's unlocked `REF … \w` fields: the full number of the paragraph
+/// their bookmark is in.
+fn number_ref_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
+    let mut out = Vec::new();
+    let mut numbers = None;
+    let mut paths = None;
+    for path in doc.para_paths(StoryRef::Body) {
+        let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
+        for (k, o) in p.objects.iter().enumerate() {
+            let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+            if wordcraft_layout::fields::field_name(instr) != "REF" || !has_switch(instr, 'w') || has_switch(instr, 'd') || has_switch(instr, 't') {
+                continue;
+            }
+            let f = FieldCode::parse(instr);
+            let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
+            let numbers = numbers.get_or_insert_with(|| para_numbers(doc));
+            let paths = paths.get_or_insert_with(|| body_bookmark_paths(doc));
+            if let Some(r) = paths.get(target).and_then(|tp| ref_number(numbers, tp, Some(&path), 'w')) {
+                out.push((StoryRef::Body, path.clone(), k, r));
+            }
+        }
+    }
+    out
 }
 
 /// The most `\r n` resets looked at by [`heal_seq_pins`].

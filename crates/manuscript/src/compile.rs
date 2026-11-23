@@ -1023,6 +1023,9 @@ pub fn compile(project: &Project, preset: &Preset) -> Result<Compiled, String> {
     let _ = s.run("numbering.repair", &json!({"kinds": ["otherList", "restart"]}));
     // Numbers typed in the section files (a chapter file that starts at 3, "Figure 3.2") give way
     // to the ones the joined document's order gives.
+    // First, what the sections' text says of things in other sections ("see Figure 3.2",
+    // "Section 2.1") is tied to them, by the numbers they were written with.
+    let _ = s.run("structure.linkMentions", &json!({}));
     let _ = s.run("structure.renumber", &json!({}));
     if let Err(e) = s.run("references.updateFields", &json!({"all": true})) {
         warnings.push(format!("updating fields: {e}"));

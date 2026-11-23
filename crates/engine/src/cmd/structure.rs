@@ -44,7 +44,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{} → {"headings": [{"path": [block], "level": 1-9, "number": shown number | null, "text", "appendix": bool}], "figures" | "tables" | "equations" | "others": [{"path": [block], "label", "number", "text", "title": the caption's heading (its bold part) | null, "id": SEQ name}], "typed": [{"path": [block], "kind": "heading|appendix|caption", "text"}] (typed as structure but still plain text), "floating": n (pictures and shapes that can move)} (at most 5000 of each)"#)
             .pure(),
         CommandSpec::new("structure.convert", "Detect Headings and Captions", "References › Captions", convert).params(
-            r#"{"kinds"?: ["heading", "appendix", "caption"] (default all)} → {"converted": n, "headings": n, "captions": n}: every body paragraph typed as a numbered heading ("2.1 Methods"), an appendix heading or a caption ("Figure 2.1: …") becomes a real one, as Enter after it would have made it. One undo step"#,
+            r#"{"kinds"?: ["heading", "appendix", "caption", "mention"] (default all)} → {"converted": n, "headings": n, "captions": n, "linked": n (mentions such as "see Figure 2.1" made references)}: every body paragraph typed as a numbered heading ("2.1 Methods"), an appendix heading or a caption ("Figure 2.1: …") becomes a real one, as Enter after it would have made it. One undo step"#,
         ),
         CommandSpec::new("structure.settleFigures", "Keep Figures in Place", "Picture Format › Arrange", settle_figures).params(
             r#"{} → {"settled": n, "floating": n left}: floating pictures become In Line with Text, each in a centred paragraph of its own kept with the paragraph after it (its caption), so text edits can't move them. Shapes and text boxes are left as they are. One undo step"#,
@@ -52,6 +52,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("structure.list", "List of Figures or Tables", "References › Captions", list).params(
             r#"{"of"?: "figures" (default) | "tables" | "equations" | a caption label of your own, "heading"?: bool (default true: a heading above the list) | string (the heading's text), "titles"?: "bold" (default: each entry shows the caption's heading, its part in bold; the whole caption when nothing in it is bold) | "full" (the whole caption), "includeLabel"?: bool (default true: "Figure 2.1" before the text), "pageNumbers"?: bool, "tabLeader"?: "dot|hyphen|underscore|none"} → {"entries": n}: inserted at the caret; References › Update Table refreshes it"#,
         ),
+        CommandSpec::new("structure.linkMentions", "Link Figure and Section Mentions", "References › Captions", |s, _| {
+            let linked = link_mentions(s)?;
+            update_numbers(s)?;
+            Ok(json!({"linked": linked}))
+        })
+        .params(r#"{} → {"linked": n}: every "Figure 2.1", "Table 3" or "Section 2.1" written as text in the body becomes a reference to the figure, table or heading that has that number now, and follows it from then on. A number nothing has stays text. One undo step"#),
         CommandSpec::new("structure.renumber", "Renumber by Position", "References › Captions", renumber).params(
             r#"{} → {"headings": n, "captions": n}: every heading and caption takes the number its place gives it: numbers pinned by typing them are let go, and a caption's typed chapter part ("4." of Figure 4.2) becomes the chapter's own number. Compiling a project does this to the joined document. One undo step"#,
         ),
@@ -708,8 +714,10 @@ fn convert(s: &mut Session, v: &Value) -> CmdResult {
     }
     s.sel = sel;
     s.clamp_selection();
+    // What the text says about them ("see Figure 2.1") follows them from now on.
+    let linked = if wants("mention") { link_mentions(s)? } else { 0 };
     update_numbers(s)?;
-    Ok(json!({"converted": headings + captions, "headings": headings, "captions": captions}))
+    Ok(json!({"converted": headings + captions, "headings": headings, "captions": captions, "linked": linked}))
 }
 
 /// `structure.settleFigures`.
@@ -752,37 +760,122 @@ fn settle_figures(s: &mut Session, _: &Value) -> CmdResult {
     Ok(json!({"settled": settled, "floating": left}))
 }
 
-/// The label and number a mention ends with, just before byte `end` of `text`: the mention's
-/// start, the number's start, and what it names.
-fn mention_before(text: &str, end: usize) -> Option<(usize, usize, CaptionLine)> {
-    let head = text.get(..end)?;
-    let from = head.char_indices().rev().take(MENTION_SCAN).last().map_or(0, |(i, _)| i);
-    let window = head.get(from..)?;
-    // The last label word in the window that starts a word.
-    let mut best: Option<(usize, CaptionLine)> = None;
-    for (i, _) in window.char_indices() {
-        let starts_word = i == 0 || window.get(..i).and_then(|w| w.chars().next_back()).is_some_and(|c| !c.is_alphanumeric());
-        if !starts_word {
-            continue;
-        }
-        if let Some(c) = window.get(i..).and_then(label_number)
-            && i + c.number.1 == window.len()
-        {
-            best = Some((from + i, c));
-        }
-    }
-    let (at, c) = best?;
-    let number = at + c.number.0;
-    Some((at, number, c))
+/// A typed mention of something numbered: where its number starts and ends in the paragraph's
+/// text, and what it names.
+struct Mention {
+    number: (usize, usize),
+    /// The caption sequence it names (`Figure`, `Table`…); `None`: a heading ("Section 2.1").
+    id: Option<&'static str>,
 }
 
-/// "Figure 2.1" typed in the text, on the space or punctuation after it: when the document has
-/// that figure, the number becomes a reference to it. `trigger` is the length of the character
-/// just typed. `false` when nothing was changed.
+/// The words a mention of a heading starts with.
+const HEADING_WORDS: [&str; 4] = ["Sections", "Section", "Sec.", "Chapter"];
+
+/// A mention of a heading at the start of `text` ("Section 2.1"): its number's start and end.
+fn heading_mention(text: &str) -> Option<(usize, usize)> {
+    let word = HEADING_WORDS.iter().find(|w| text.get(..w.len()).is_some_and(|h| h.eq_ignore_ascii_case(w)))?;
+    let rest = text.get(word.len()..)?;
+    let sp = rest.len() - rest.trim_start_matches([' ', '\u{a0}']).len();
+    if sp == 0 {
+        return None;
+    }
+    let start = word.len() + sp;
+    let b = text.get(start..)?.as_bytes();
+    let mut i = 0usize;
+    loop {
+        let d = b.iter().skip(i).take_while(|c| c.is_ascii_digit()).count();
+        if d == 0 || d > 3 {
+            return None;
+        }
+        i += d;
+        if b.get(i) == Some(&b'.') && b.get(i + 1).is_some_and(u8::is_ascii_digit) && i < 24 {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    // "Section 2.1a" isn't a number.
+    (!b.get(i).is_some_and(u8::is_ascii_alphanumeric)).then_some((start, start + i))
+}
+
+/// The mention at byte `i` of `text`, where a word starts.
+fn mention_at(text: &str, i: usize) -> Option<Mention> {
+    let rest = text.get(i..)?;
+    if let Some(c) = label_number(rest) {
+        let ends = !rest.as_bytes().get(c.number.1).is_some_and(u8::is_ascii_alphanumeric);
+        return ends.then_some(Mention { number: (i + c.number.0, i + c.number.1), id: Some(c.id) });
+    }
+    heading_mention(rest).map(|(a, b)| Mention { number: (i + a, i + b), id: None })
+}
+
+/// The mention that ends exactly at byte `end` of `text`, looking back a few words, and where
+/// its label starts.
+fn mention_before(text: &str, end: usize) -> Option<(usize, Mention)> {
+    let head = text.get(..end)?;
+    let from = head.char_indices().rev().take(MENTION_SCAN).last().map_or(0, |(i, _)| i);
+    let mut best = None;
+    for (i, _) in head.char_indices().filter(|(i, _)| *i >= from) {
+        let starts_word = head.get(..i).and_then(|w| w.chars().next_back()).is_none_or(|c| !c.is_alphanumeric());
+        if starts_word
+            && let Some(m) = mention_at(head, i)
+            && m.number.1 == end
+        {
+            best = Some((i, m));
+        }
+    }
+    best
+}
+
+/// Make the number at `m.number` of body paragraph `k` a reference to what it names, when the
+/// document has it: a caption with that number, or a heading that shows it. Returns the bytes
+/// the paragraph's text grew by (`None`: nothing has that number, and the text stays).
+fn link_mention(s: &mut Session, k: usize, m: &Mention) -> Result<Option<isize>, CmdError> {
+    let path = Path::top(k);
+    let Some(para) = s.doc.para(StoryRef::Body, &path) else { return Ok(None) };
+    let Some(typed_number) = para.text.get(m.number.0..m.number.1).map(str::to_string) else { return Ok(None) };
+    if para.run_ranges().any(|(_, c)| c.del.is_some()) || typed_number.contains(OBJ) {
+        return Ok(None);
+    }
+    let props = para.props_at(m.number.0).clone().without_symbol();
+    let before = para.len();
+    let instr = match m.id {
+        Some(id) => {
+            let Some(target) = captions(s).into_iter().find(|c| c.id == id && c.number == typed_number && c.k != k) else { return Ok(None) };
+            let pos = Pos { story: StoryRef::Body, path: Path::top(target.k), off: 0 };
+            format!("REF {} \\h", number_bookmark(s, &pos, target.span)?)
+        }
+        None => {
+            let Some(target) = numbered_headings(s).into_iter().find(|(hk, _, _, _)| {
+                *hk != k && crate::cmd::references::paragraph_number(&s.doc, &Path::top(*hk)).as_deref() == Some(typed_number.as_str())
+            }) else {
+                return Ok(None);
+            };
+            let len = s.doc.para(StoryRef::Body, &Path::top(target.0)).map_or(0, Paragraph::len);
+            let pos = Pos { story: StoryRef::Body, path: Path::top(target.0), off: 0 };
+            format!("REF {} \\w \\h", heading_bookmark(s, &pos, len)?)
+        }
+    };
+    let sel = s.sel.clone();
+    let from = Pos { story: StoryRef::Body, path: path.clone(), off: m.number.0 };
+    s.sel = Selection { anchor: from.clone(), focus: Pos { off: m.number.1, ..from } };
+    let at = crate::cmd::delete_selection(s)?;
+    s.doc.insert_object(
+        &at,
+        InlineObject::Field { instr, result: typed_number, locked: false, dirty: false, code: false, form: String::new() },
+        &props,
+    )?;
+    s.sel = sel;
+    let after = s.doc.para(StoryRef::Body, &path).map_or(before, Paragraph::len);
+    Ok(Some(after as isize - before as isize))
+}
+
+/// "Figure 2.1" or "Section 2.1" typed in the text, on the space or punctuation after it: when
+/// the document has that figure or heading, the number becomes a reference to it. `trigger` is
+/// the length of the character just typed. `false` when nothing was changed.
 pub(crate) fn mention_autoformat(s: &mut Session, trigger: usize) -> Result<bool, CmdError> {
     let ac = &s.prefs.autocorrect;
     let f = s.sel.focus.clone();
-    if !ac.enabled || !ac.structure || !s.sel.is_collapsed() || f.story != StoryRef::Body {
+    if !ac.enabled || !ac.structure || !s.sel.is_collapsed() || f.story != StoryRef::Body || f.path.0.len() != 1 {
         return Ok(false);
     }
     let Some(para) = s.doc.para_at(&f) else { return Ok(false) };
@@ -791,30 +884,73 @@ pub(crate) fn mention_autoformat(s: &mut Session, trigger: usize) -> Result<bool
     if seq_id(para).is_some() {
         return Ok(false);
     }
-    let Some((label_at, number_at, m)) = mention_before(&para.text, end) else { return Ok(false) };
+    let Some((label_at, m)) = mention_before(&para.text, end) else { return Ok(false) };
     // A paragraph that starts with the label may be a caption being typed: Enter decides.
     if para.text.get(..label_at).is_none_or(|lead| lead.trim().is_empty()) {
         return Ok(false);
     }
-    let typed_number = para.text.get(number_at..end).unwrap_or("").to_string();
-    // A trailing full stop ends the sentence, not the number.
-    let Some(target) = captions(s).into_iter().find(|c| c.id == m.id && c.number == typed_number) else { return Ok(false) };
-    if para.run_ranges().any(|(_, c)| c.del.is_some()) {
-        return Ok(false);
-    }
-    let props = para.props_at(number_at).clone().without_symbol();
-    let target_pos = Pos { story: StoryRef::Body, path: Path::top(target.k), off: 0 };
-    let name = number_bookmark(s, &target_pos, target.span)?;
-    let from = Pos { off: number_at, ..f.clone() };
-    s.sel = Selection { anchor: from.clone(), focus: Pos { off: end, ..f.clone() } };
-    let at = crate::cmd::delete_selection(s)?;
-    let after = s.doc.insert_object(
-        &at,
-        InlineObject::Field { instr: format!("REF {name} \\h"), result: typed_number, locked: false, dirty: false, code: false, form: String::new() },
-        &props,
-    )?;
-    s.sel = Selection::caret(Pos { off: after.off + trigger, ..after });
+    let k = f.path.0.first().copied().unwrap_or(0) as usize;
+    let Some(grew) = link_mention(s, k, &m)? else { return Ok(false) };
+    let off = usize::try_from(f.off as isize + grew).unwrap_or(f.off);
+    s.sel = Selection::caret(Pos { off, ..f });
     Ok(true)
+}
+
+/// `structure.linkMentions`: every "Figure 2.1", "Table 3" or "Section 2.1" written as text in
+/// the body's paragraphs becomes a reference to the figure, table or heading with that number,
+/// when the document has one. Returns how many were linked.
+pub(crate) fn link_mentions(s: &mut Session) -> Result<usize, CmdError> {
+    let mut linked = 0usize;
+    for k in 0..s.doc.body.len() {
+        if linked >= MAX_ITEMS {
+            break;
+        }
+        let Some(p) = s.doc.body.get(k).and_then(|b| b.as_para()) else { continue };
+        // Captions and headings hold their own numbers; a line typed as a caption stays one.
+        let at_end = Pos { story: StoryRef::Body, path: Path::top(k), off: p.len() };
+        if seq_id(p).is_some() || s.doc.styles.resolve_para(&p.props).outline_level.is_some_and(|l| l < 9) || enter_caption(s, &at_end).is_some() {
+            continue;
+        }
+        let text = p.text.clone();
+        let mut found: Vec<Mention> = Vec::new();
+        let mut skip_to = 0usize;
+        for (i, _) in text.char_indices() {
+            if i < skip_to || found.len() >= 200 {
+                continue;
+            }
+            let starts_word = text.get(..i).and_then(|w| w.chars().next_back()).is_none_or(|c| !c.is_alphanumeric());
+            if starts_word && let Some(m) = mention_at(&text, i) {
+                skip_to = m.number.1;
+                found.push(m);
+            }
+        }
+        // Last first: a link changes the offsets after it only.
+        for m in found.iter().rev() {
+            if link_mention(s, k, m)?.is_some() {
+                linked += 1;
+            }
+        }
+    }
+    s.clamp_selection();
+    Ok(linked)
+}
+
+/// The hidden `_Ref` bookmark around the whole heading at `pos` (`len` bytes long), reusing one
+/// that is already there. Returns its name.
+fn heading_bookmark(s: &mut Session, pos: &Pos, len: usize) -> Result<String, CmdError> {
+    let para = s.doc.para(pos.story, &pos.path).ok_or_else(|| CmdError::Failed("the heading is gone".into()))?;
+    if let Some(InlineObject::BookmarkStart { name }) = para.object_at(0)
+        && (name.starts_with("_Ref") || name.starts_with("_Toc"))
+    {
+        return Ok(name.clone());
+    }
+    let next =
+        s.doc.bookmarks().iter().filter_map(|(n, _)| n.strip_prefix("_Ref").and_then(|d| d.parse::<u64>().ok())).max().unwrap_or(0).saturating_add(1);
+    let name = format!("_Ref{next:09}");
+    let props = wordcraft_doc::props::CharProps::default();
+    s.doc.insert_object(&Pos { off: len, ..pos.clone() }, InlineObject::BookmarkEnd { name: name.clone() }, &props)?;
+    s.doc.insert_object(&Pos { off: 0, ..pos.clone() }, InlineObject::BookmarkStart { name: name.clone() }, &props)?;
+    Ok(name)
 }
 
 /// The hidden `_Ref` bookmark around the number of the caption at `pos` (`span` in its text),

@@ -251,6 +251,38 @@ Figure 3.7: Late
 }
 
 #[test]
+fn a_section_named_in_the_text_follows_its_number() {
+    let mut s =
+        typed("1 Introduction\n1.1 Background\n2 Methods\n2.1 Sampling\nAs Section 2.1 says, and Chapter 1 before it. Section 9.9 is not there.\n");
+    let find = |s: &Session| s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.text.starts_with("As ")).unwrap().clone();
+    let refs = |p: &wordcraft_doc::Paragraph| {
+        p.objects.iter().filter(|o| matches!(o, InlineObject::Field { instr, .. } if instr.starts_with("REF "))).count()
+    };
+    assert_eq!(refs(&find(&s)), 2);
+    assert_eq!(find(&s).plain_text(), "As Section 2.1 says, and Chapter 1 before it. Section 9.9 is not there.");
+    // A chapter typed before Methods: its sections, and what the text says of them, move on.
+    let k = s.doc.body.iter().position(|b| b.as_para().is_some_and(|p| p.text == "Background")).unwrap();
+    run(&mut s, "caret.set", json!({"pos": Pos { story: StoryRef::Body, path: Path::top(k), off: "Background".len() }}));
+    typ(&mut s, "\n2 Theory\n");
+    assert_eq!(headings(&mut s), ["1 Introduction", "1.1 Background", "2 Theory", "3 Methods", "3.1 Sampling"]);
+    run(&mut s, "structure.update", json!({}));
+    assert_eq!(find(&s).plain_text(), "As Section 3.1 says, and Chapter 1 before it. Section 9.9 is not there.");
+}
+
+#[test]
+fn mentions_written_as_text_are_linked_in_one_step() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.prefs.autocorrect.structure = false;
+    typ(&mut s, "1 Results\nFigure 1.1: Yield\nTable 1.1: Reagents\nFigure 1.1 shows the yield; see also Table 1.1, Section 1 and Figure 7.7.\n");
+    s.prefs.autocorrect.structure = true;
+    let r = run(&mut s, "structure.convert", json!({}));
+    assert_eq!((r["headings"].as_u64(), r["captions"].as_u64(), r["linked"].as_u64()), (Some(1), Some(2), Some(3)));
+    let p = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text().contains("shows the yield")).unwrap();
+    assert_eq!(p.plain_text(), "Figure 1.1 shows the yield; see also Table 1.1, Section 1 and Figure 7.7.");
+    assert_eq!(run(&mut s, "structure.linkMentions", json!({}))["linked"], 0, "nothing is linked twice");
+}
+
+#[test]
 fn undo_brings_the_typed_line_back() {
     let mut s = typed("2.1 Sampling\n");
     assert_eq!(headings(&mut s), ["2.1 Sampling"]);
@@ -297,6 +329,7 @@ fn hostile_lines_never_panic() {
         let _ = typed::appendix_line(&text);
         let _ = typed::appendix_sub_line(&text);
         let _ = mention_before(&text, text.len());
+        let _ = heading_mention(&text);
         let mut s = Session::new(wordcraft_doc::Document::new());
         run(&mut s, "text.insert", json!({"text": text, "raw": true}));
         run(&mut s, "text.newParagraph", json!({}));
