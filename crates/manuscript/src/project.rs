@@ -115,6 +115,14 @@ pub struct NumberingRule {
     /// `next` (a new page), `odd` (a right-hand page) or `even`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_on: Option<String>,
+    /// The number its first page takes ("start at 5 from here"). Its own only: a folder's goes
+    /// to the first section in it, and the sections after count on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<u32>,
+    /// `false`: its pages show no number and aren't counted, so the pages after them number
+    /// as if they weren't there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counted: Option<bool>,
     #[serde(flatten)]
     pub extra: toml::Table,
 }

@@ -222,6 +222,10 @@ pub struct Rule {
     pub zone: Zone,
     pub show: Show,
     pub start_on: StartOn,
+    /// The number the item's first page takes.
+    pub start: Option<u32>,
+    /// Its pages show no number and aren't counted.
+    pub uncounted: bool,
 }
 
 impl Rule {
@@ -250,9 +254,16 @@ impl Rule {
             Some("even") => StartOn::Even,
             Some(x) => return Err(format!("numbering start_on {:?} isn't next, odd or even", short(x))),
         };
-        Ok(Rule { zone, show, start_on })
+        if r.start.is_some_and(|n| n > MAX_PAGE_START) {
+            return Err(format!("numbering start is at most {MAX_PAGE_START}"));
+        }
+        // A start is the item's own: it isn't handed down (see `included`).
+        Ok(Rule { zone, show, start_on, start: None, uncounted: r.counted.map_or(self.uncounted, |c| !c) })
     }
 }
+
+/// The largest number a page can be told to start at.
+pub const MAX_PAGE_START: u32 = 32_767;
 
 /// Roles whose items hold a generated list rather than text.
 pub const GENERATED: [&str; 6] = ["contents", "figures", "tables", "equations", "bibliography", "index"];
@@ -526,7 +537,16 @@ impl Entry<'_> {
 
 /// The included sections in binder order, with their top-level item, depth and numbering.
 fn included<'a>(items: &'a [Item], preset: &Preset) -> Result<Vec<Entry<'a>>, String> {
-    fn walk<'a>(items: &'a [Item], top: Option<&'a str>, depth: usize, rule: Rule, preset: &Preset, out: &mut Vec<Entry<'a>>) -> Result<(), String> {
+    // `start`: a number waiting for the next section met (a folder's start goes to its first).
+    fn walk<'a>(
+        items: &'a [Item],
+        top: Option<&'a str>,
+        depth: usize,
+        rule: Rule,
+        start: &mut Option<u32>,
+        preset: &Preset,
+        out: &mut Vec<Entry<'a>>,
+    ) -> Result<(), String> {
         if depth > MAX_DEPTH {
             return Ok(());
         }
@@ -539,19 +559,22 @@ fn included<'a>(items: &'a [Item], preset: &Preset) -> Result<Vec<Entry<'a>>, St
                 Some(r) => rule.with(r).map_err(|e| format!("{} ({}): {e}", i.title, i.id))?,
                 None => rule,
             };
+            if let Some(n) = i.numbering.as_ref().and_then(|r| r.start) {
+                *start = Some(n);
+            }
             match i.kind {
                 Kind::Section => {
                     if preset.include_labels.is_empty() || preset.include_labels.contains(&i.label) {
-                        out.push(Entry { item: i, top, depth, rule });
+                        out.push(Entry { item: i, top, depth, rule: Rule { start: start.take(), ..rule } });
                     }
                 }
-                Kind::Folder => walk(&i.children, Some(top), depth + 1, rule, preset, out)?,
+                Kind::Folder => walk(&i.children, Some(top), depth + 1, rule, start, preset, out)?,
             }
         }
         Ok(())
     }
     let mut out = Vec::new();
-    walk(items, None, 1, Rule::default(), preset, &mut out)?;
+    walk(items, None, 1, Rule::default(), &mut None, preset, &mut out)?;
     Ok(out)
 }
 
@@ -611,11 +634,88 @@ fn apply(p: &mut SectionProps, sect: Sect) {
         StartOn::Odd => p.start = SectionStart::OddPage,
         StartOn::Even => p.start = SectionStart::EvenPage,
     }
+    // "Start at 5 from here" wins over where its zone would start.
+    if let Some(n) = sect.rule.start {
+        p.page_num_start = Some(n);
+        p.page_num_set = true;
+    }
+    if sect.rule.uncounted {
+        p.page_num_format = NumFormat::None;
+        p.page_num_set = true;
+    }
+}
+
+/// Section `k`'s properties in `doc` (in the order of `Document::sections`): the `k`th paragraph
+/// that ends a section, else the document's last section.
+fn section_props_mut(doc: &mut Document, k: usize) -> Option<&mut SectionProps> {
+    let at = doc.body.iter().enumerate().filter(|(_, b)| b.as_para().is_some_and(|p| p.section.is_some())).map(|(i, _)| i).nth(k);
+    match at {
+        Some(i) => {
+            let Block::Para(p) = Arc::make_mut(doc.body.get_mut(i)?) else { return None };
+            p.touch();
+            p.section.as_deref_mut()
+        }
+        None => {
+            let ends = doc.body.iter().filter(|b| b.as_para().is_some_and(|p| p.section.is_some())).count();
+            if k != ends {
+                return None;
+            }
+            if let Some(Block::Para(p)) = doc.body.last_mut().map(Arc::make_mut) {
+                p.touch();
+            }
+            Some(&mut doc.last_section)
+        }
+    }
+}
+
+/// Pages that aren't counted: the section after each uncounted one starts at the number the
+/// uncounted one's first page would have had, so the count carries on as if those pages
+/// weren't there. The page counts come from laying the document out, and a changed start can
+/// move them, so this is done again until nothing changes (at most a few times).
+fn skip_uncounted(s: &mut Session, uncounted: &[bool], warnings: &mut Vec<String>) {
+    if !uncounted.iter().any(|u| *u) {
+        return;
+    }
+    if s.doc.sections().len() != uncounted.len() {
+        warnings.push("pages left out of the count: the compiled document's sections changed, so their numbers weren't skipped".into());
+        return;
+    }
+    // The starts set here: a start the binder gave (or a zone's) stays as it is.
+    let mut ours: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
+    for pass in 0..4 {
+        let l = s.layout();
+        let mut changed = false;
+        for (k, _) in uncounted.iter().enumerate().filter(|(_, u)| **u) {
+            let next = k + 1;
+            let Some(first) = l.pages.iter().find(|p| p.section == k).map(|p| p.number) else { continue };
+            // The counted section this one's number passes to: after any uncounted ones.
+            let Some(to) = (next..uncounted.len()).find(|j| !uncounted.get(*j).copied().unwrap_or(false)) else { continue };
+            let free = s.doc.sections().get(to).is_some_and(|(_, sp)| sp.page_num_start.is_none()) || ours.contains_key(&to);
+            // Only the first of a run of uncounted sections sets it.
+            let leads = k == 0 || !uncounted.get(k - 1).copied().unwrap_or(false);
+            if !free || !leads || ours.get(&to) == Some(&first) {
+                continue;
+            }
+            if let Some(sp) = section_props_mut(&mut s.doc, to) {
+                sp.page_num_start = Some(first);
+                ours.insert(to, first);
+                changed = true;
+            }
+        }
+        if !changed {
+            return;
+        }
+        if pass == 3 {
+            warnings.push("pages left out of the count: the page numbers didn't settle".into());
+        }
+    }
 }
 
 /// Join the project's included sections with `preset`; the generated lists are left as
 /// placeholders for [`compile`].
-fn join_with_placeholders(project: &Project, preset: &Preset) -> Result<(Compiled, Vec<Placeholder>), String> {
+fn join_with_placeholders(project: &Project, preset: &Preset) -> Result<(Compiled, Vec<Placeholder>, Vec<bool>), String> {
+    // Whether each section of the joined document is left out of the page count, in order.
+    let mut uncounted: Vec<bool> = Vec::new();
     let entries = included(&project.file.items, preset)?;
     let mut doc = base(project, preset, &entries)?;
     let template_section = doc.last_section.clone();
@@ -694,6 +794,7 @@ fn join_with_placeholders(project: &Project, preset: &Preset) -> Result<(Compile
                 sect.start = SectionStart::NextPage;
                 apply(&mut sect, before);
                 end_section(&mut body, sect);
+                uncounted.push(before.rule.uncounted);
                 starts = true;
             } else {
                 separate(&mut blocks, sep);
@@ -715,17 +816,20 @@ fn join_with_placeholders(project: &Project, preset: &Preset) -> Result<(Compile
     }
     if let Some((_, s)) = last {
         apply(&mut doc.last_section, s);
+        uncounted.push(s.rule.uncounted);
+    } else {
+        uncounted.push(false);
     }
     doc.body = body;
     if floating > 0 {
         warnings.push(format!("{floating} floating picture(s) or shape(s): they can move when the text above them changes; In Line with Text (normalize_figures = \"inline\") keeps a figure in place"));
     }
-    Ok((Compiled { doc, sections, warnings }, placeholders))
+    Ok((Compiled { doc, sections, warnings }, placeholders, uncounted))
 }
 
 /// Join the project's included sections with `preset` (generated lists not filled in).
 pub fn join(project: &Project, preset: &Preset) -> Result<Compiled, String> {
-    join_with_placeholders(project, preset).map(|(c, _)| c)
+    join_with_placeholders(project, preset).map(|(c, _, _)| c)
 }
 
 /// Make sure style `id` exists in `doc` (from the built-in styles), and return its id.
@@ -888,7 +992,7 @@ fn unnumber_generated_headings(s: &mut Session) {
 /// that a section file numbered with a list of its own, every field (captions,
 /// cross-references, the bibliography…), and the tables of contents and figures.
 pub fn compile(project: &Project, preset: &Preset) -> Result<Compiled, String> {
-    let (Compiled { doc, sections, mut warnings }, mut placeholders) = join_with_placeholders(project, preset)?;
+    let (Compiled { doc, sections, mut warnings }, mut placeholders, uncounted) = join_with_placeholders(project, preset)?;
     let mut s = Session::new(doc);
     // Last first: filling one in moves the paragraphs after it.
     placeholders.sort_by_key(|p| std::cmp::Reverse(p.at));
@@ -926,6 +1030,7 @@ pub fn compile(project: &Project, preset: &Preset) -> Result<Compiled, String> {
     // A document without a table of contents or figures says so; that's not a problem here.
     let _ = s.run("references.updateToc", &json!({}));
     let _ = s.run("references.updateFigures", &json!({}));
+    skip_uncounted(&mut s, &uncounted, &mut warnings);
     for m in missing_references(&s.doc) {
         warnings.push(format!("a cross-reference points at {m:?}, which isn't in the compiled document"));
     }

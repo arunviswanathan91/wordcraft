@@ -570,3 +570,65 @@ fn a_book_from_the_template_counts_chapters_in_words() {
     assert_eq!(four["outline"]["headings"][0]["number"], "Chapter 4");
     assert_eq!(four["outline"]["headings"][0]["text"], "Home Again");
 }
+
+/// The number shown on the page where the heading `text` is, in the laid-out `s`.
+fn page_number_of(s: &mut Session, text: &str) -> (u32, wordcraft_doc::section::NumFormat) {
+    let k =
+        s.doc.body.iter().position(|b| b.as_para().is_some_and(|p| p.plain_text() == text && p.props.style.as_deref() == Some("Heading1"))).unwrap();
+    let l = s.layout();
+    let page = l.pages.iter().rev().find(|p| p.first_block <= k).unwrap();
+    let format = s.doc.sections().get(page.section).map(|(_, sp)| sp.page_num_format).unwrap();
+    (page.number, format)
+}
+
+#[test]
+fn page_numbers_start_where_told_and_skip_uncounted_pages() {
+    use wordcraft_doc::section::NumFormat;
+    let mut s = session();
+    let root = scratch().join("Pages.wcproj");
+    let p = root.to_string_lossy().to_string();
+    let info = s.run("project.new", &json!({"path": p, "title": "Pages", "template": "thesis"})).unwrap();
+    let ids = ids_by_title(&info);
+    let compile = |root: &Path| {
+        let pr = crate::project::Project::open(root).unwrap();
+        let c = crate::compile::compile(&pr, &crate::compile::presets(&pr).unwrap()[0]).unwrap();
+        (Session::new(c.doc), c.warnings)
+    };
+    // As the template has it: roman front matter, the chapters from 1.
+    let (mut doc, _) = compile(&root);
+    assert_eq!(page_number_of(&mut doc, "Abstract").1, NumFormat::LowerRoman);
+    assert_eq!(page_number_of(&mut doc, "Introduction"), (1, NumFormat::Decimal));
+    assert_eq!(page_number_of(&mut doc, "Literature Review").0, 2);
+    assert_eq!(page_number_of(&mut doc, "Results").0, 4);
+    // "Start at 5 from here" on the Introduction: the chapters after count on.
+    s.run("binder.setMeta", &json!({"project": p, "id": ids["Introduction"], "numbering": {"start": 5}})).unwrap();
+    let info = s.run("project.info", &json!({"project": p})).unwrap();
+    let intro = info["items"][1]["children"][0].clone();
+    assert_eq!(intro["numbering"]["start"], 5);
+    let (mut doc, _) = compile(&root);
+    assert_eq!(page_number_of(&mut doc, "Introduction"), (5, NumFormat::Decimal));
+    assert_eq!(page_number_of(&mut doc, "Literature Review").0, 6);
+    assert_eq!(page_number_of(&mut doc, "Methods").0, 7);
+    // Methods left out of the count: it shows no number, and Results takes the number it had.
+    s.run("binder.setMeta", &json!({"project": p, "id": ids["Methods"], "numbering": {"counted": false}})).unwrap();
+    let (mut doc, warnings) = compile(&root);
+    assert!(!warnings.iter().any(|w| w.contains("count")), "{warnings:?}");
+    assert_eq!(page_number_of(&mut doc, "Methods").1, NumFormat::None);
+    assert_eq!(page_number_of(&mut doc, "Results"), (7, NumFormat::Decimal));
+    assert_eq!(page_number_of(&mut doc, "Discussion").0, 8);
+    // Numbers hidden on a chapter that still counts.
+    s.run("binder.setMeta", &json!({"project": p, "id": ids["Methods"], "numbering": {"show": "none"}})).unwrap();
+    let (mut doc, _) = compile(&root);
+    assert_eq!(page_number_of(&mut doc, "Methods").1, NumFormat::None);
+    assert_eq!(page_number_of(&mut doc, "Results").0, 8);
+    // Cleared: back to what the folder gives.
+    s.run("binder.setMeta", &json!({"project": p, "id": ids["Methods"], "numbering": null})).unwrap();
+    s.run("binder.setMeta", &json!({"project": p, "id": ids["Introduction"], "numbering": null})).unwrap();
+    let (mut doc, _) = compile(&root);
+    assert_eq!(page_number_of(&mut doc, "Results"), (4, NumFormat::Decimal));
+    // A page number is at the foot of the pages.
+    let l = doc.layout();
+    assert!(l.pages.iter().any(|pg| !pg.footer.is_empty()), "the pages have a footer");
+    assert!(s.run("binder.setMeta", &json!({"project": p, "id": ids["Methods"], "numbering": {"start": 99999}})).is_err());
+    assert!(s.run("binder.setMeta", &json!({"project": p, "id": ids["Methods"], "numbering": {"counted": "no"}})).is_err());
+}

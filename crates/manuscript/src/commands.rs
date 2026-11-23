@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"project": folder, "id", "parent"?: folder id | null (the top level), "index"?: n (default last)}"#)
             .pure(),
         CommandSpec::new("binder.setMeta", "Binder Item Properties", LOC, set_meta)
-            .params(r#"{"project": folder, "id", "title"?, "synopsis"?, "label"?, "status"?, "role"?: string, "target"?: words | null, "include"?: bool, "numbering"?: {"zone"?: "continue|front|main|appendix|none", "show"?: "all|not-first|none", "startOn"?: "next|odd|even"} | null (how its pages are numbered when compiled; what a folder holds inherits it)}"#)
+            .params(r#"{"project": folder, "id", "title"?, "synopsis"?, "label"?, "status"?, "role"?: string, "target"?: words | null, "include"?: bool, "numbering"?: {"zone"?: "continue|front|main|appendix|none", "show"?: "all|not-first|none", "start"?: n (the number its first page takes: "start at 5 from here") | null, "counted"?: bool (false: its pages show no number and aren't counted; the pages after number as if they weren't there), "startOn"?: "next|odd|even"} | null (how its pages are numbered when compiled; what a folder holds inherits it)}"#)
             .pure(),
         CommandSpec::new("binder.rename", "Rename Binder Item", LOC, set_meta).params(r#"{"project": folder, "id", "title": string}"#).pure(),
         CommandSpec::new("binder.delete", "Delete Binder Item", LOC, delete)
@@ -219,6 +219,7 @@ fn item_json(i: &Item, cache: &mut Cache, pr: &Project, changed: &mut bool, dept
         "role": i.role,
         "target": i.target_words,
         "include": i.include,
+        "numbering": i.numbering.as_ref().map(|n| json!({"zone": n.zone, "show": n.show, "startOn": n.start_on, "start": n.start, "counted": n.counted})),
     });
     match i.kind {
         Kind::Section => {
@@ -399,7 +400,28 @@ fn numbering_rule(v: &Value) -> Result<Option<Option<crate::project::NumberingRu
             Some(_) => Err(CmdError::Params(format!("`numbering.{k}` is text"))),
         }
     };
-    let rule = crate::project::NumberingRule { zone: get("zone")?, show: get("show")?, start_on: get("startOn")?, extra: toml::Table::new() };
+    let start = match n.get("start") {
+        None | Some(Value::Null) => None,
+        Some(x) => Some(
+            x.as_u64()
+                .and_then(|x| u32::try_from(x).ok())
+                .filter(|x| *x <= crate::compile::MAX_PAGE_START)
+                .ok_or_else(|| CmdError::Params(format!("`numbering.start` is a whole number up to {}", crate::compile::MAX_PAGE_START)))?,
+        ),
+    };
+    let counted = match n.get("counted") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(_) => return Err(CmdError::Params("`numbering.counted` is true or false".into())),
+    };
+    let rule = crate::project::NumberingRule {
+        zone: get("zone")?,
+        show: get("show")?,
+        start_on: get("startOn")?,
+        start,
+        counted,
+        extra: toml::Table::new(),
+    };
     crate::compile::Rule::default().with(&rule).map_err(CmdError::Params)?;
     Ok(Some(Some(rule)))
 }

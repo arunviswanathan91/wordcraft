@@ -661,6 +661,8 @@ enum Do {
     EmptyTrash,
     Add(&'static str),
     Snapshot,
+    /// Set an item's page numbering (`binder.setMeta`'s `numbering`; null clears it).
+    Numbering(String, Value),
 }
 
 /// The Binder pane.
@@ -767,6 +769,7 @@ pub fn binder(app: &mut WordApp, ui: &mut Ui) {
         Do::EmptyTrash => project_run(app, "binder.emptyTrash", json!({})),
         Do::Add(kind) => add(app, kind),
         Do::Snapshot => app.run("ui.project.snapshot", json!({})),
+        Do::Numbering(id, rule) => project_run(app, "binder.setMeta", json!({"id": id, "numbering": rule})),
     };
     match r {
         Ok(_) => {
@@ -779,6 +782,111 @@ pub fn binder(app: &mut WordApp, ui: &mut Ui) {
                 p.error = Some(e);
             }
         }
+    }
+}
+
+/// `rule` (an item's `numbering`, or null) with `key` set to `value`, or taken out when `value`
+/// is null; null when nothing is left set.
+fn with_rule(rule: &Value, key: &str, value: Value) -> Value {
+    let mut o = rule.as_object().cloned().unwrap_or_default();
+    o.retain(|_, v| !v.is_null());
+    if value.is_null() {
+        o.remove(key);
+    } else {
+        o.insert(key.to_string(), value);
+    }
+    if o.is_empty() { Value::Null } else { Value::Object(o) }
+}
+
+/// A few words on an item's own page numbering, shown beside it in the binder.
+fn numbering_note(rule: &Value) -> Option<String> {
+    if !rule.is_object() {
+        return None;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    match rule["zone"].as_str() {
+        Some("front") => parts.push("i, ii".into()),
+        Some("main") => parts.push("1, 2".into()),
+        Some("none") => parts.push(tl!("no numbers").into()),
+        _ => {}
+    }
+    if let Some(n) = rule["start"].as_u64() {
+        parts.push(crate::i18n::fmt(tl!("from {n}"), &[("n", &n.to_string())]));
+    }
+    if rule["counted"] == false {
+        parts.push(tl!("not counted").into());
+    } else if rule["show"] == "none" {
+        parts.push(tl!("number hidden").into());
+    } else if rule["show"] == "not-first" {
+        parts.push(tl!("hidden on first page").into());
+    }
+    if rule["startOn"] == "odd" {
+        parts.push(tl!("right-hand page").into());
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// Page Numbers for a binder item: how its pages are numbered when the project is compiled. A
+/// folder's choices apply to what it holds, but "Start at", which goes to its first section.
+fn page_numbers_menu(ui: &mut Ui, id: &str, rule: &Value, todo: &mut Option<Do>) {
+    let mut set = |ui: &mut Ui, key: &str, value: Value| {
+        *todo = Some(Do::Numbering(id.to_string(), with_rule(rule, key, value)));
+        ui.close();
+    };
+    let zone = rule["zone"].as_str().unwrap_or("");
+    if ui.radio(zone == "front", tl!("Roman numerals (i, ii, iii)")).clicked() {
+        set(ui, "zone", json!("front"));
+    }
+    if ui.radio(zone == "main", tl!("Numbers (1, 2, 3), from 1")).clicked() {
+        set(ui, "zone", json!("main"));
+    }
+    if ui.radio(zone.is_empty() || zone == "continue", tl!("Carry on from the pages before")).clicked() {
+        set(ui, "zone", Value::Null);
+    }
+    ui.separator();
+    // Start at N from here.
+    let key = egui::Id::new(("binder_page_start", id));
+    let mut n = ui.data(|d| d.get_temp::<u32>(key)).unwrap_or_else(|| rule["start"].as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(1));
+    crate::widgets::row(ui, |ui| {
+        ui.label(tl!("Start at"));
+        if ui.add(egui::DragValue::new(&mut n).range(0..=wordcraft_manuscript::compile::MAX_PAGE_START).speed(0.2)).changed() {
+            ui.data_mut(|d| d.insert_temp(key, n));
+        }
+        if ui.button(tl!("Set")).on_hover_text(tl!("The first page of this item takes that number, and the pages after count on from it")).clicked() {
+            ui.data_mut(|d| d.remove::<u32>(key));
+            set(ui, "start", json!(n));
+        }
+    });
+    if rule["start"].is_u64() && ui.button(tl!("Don't restart here")).clicked() {
+        set(ui, "start", Value::Null);
+    }
+    ui.separator();
+    let counted = rule["counted"] != false;
+    let shown = rule["show"] != "none";
+    let mut c = counted;
+    if ui
+        .checkbox(&mut c, tl!("Count these pages"))
+        .on_hover_text(tl!("Off: these pages show no number, and the pages after them number as if they weren't there"))
+        .clicked()
+    {
+        set(ui, "counted", if c { Value::Null } else { json!(false) });
+    }
+    let mut sh = shown && counted;
+    if ui.add_enabled(counted, egui::Checkbox::new(&mut sh, tl!("Show the page number"))).clicked() {
+        set(ui, "show", if sh { Value::Null } else { json!("none") });
+    }
+    let mut first = rule["show"] == "not-first";
+    if ui.add_enabled(counted && shown, egui::Checkbox::new(&mut first, tl!("Hide it on the first page"))).clicked() {
+        set(ui, "show", if first { json!("not-first") } else { Value::Null });
+    }
+    let mut odd = rule["startOn"] == "odd";
+    if ui.checkbox(&mut odd, tl!("Start on a right-hand page")).clicked() {
+        set(ui, "startOn", if odd { json!("odd") } else { Value::Null });
+    }
+    ui.separator();
+    if ui.add_enabled(rule.is_object(), egui::Button::new(tl!("Reset"))).on_hover_text(tl!("Number these pages as the folder above says")).clicked() {
+        *todo = Some(Do::Numbering(id.to_string(), Value::Null));
+        ui.close();
     }
 }
 
@@ -857,6 +965,10 @@ fn tree(ui: &mut Ui, items: &Value, parent: Option<&str>, depth: usize, cx: &Ctx
                 if r.double_clicked() && !trash {
                     *todo = Some(Do::StartRename(id.to_string()));
                 }
+                if let Some(note) = numbering_note(&item["numbering"]) {
+                    ui.label(egui::RichText::new(note).small().weak())
+                        .on_hover_text(tl!("Page numbering set here. Right-click the item, then Page Numbers, to change it."));
+                }
                 if let Some(w) = item["words"].as_u64() {
                     let words = match item["target"].as_u64() {
                         Some(t) => format!("{w}/{t}"),
@@ -884,6 +996,7 @@ fn tree(ui: &mut Ui, items: &Value, parent: Option<&str>, depth: usize, cx: &Ctx
                         *todo = Some(Do::Move(id.to_string(), parent.map(str::to_string), k + 1));
                         ui.close();
                     }
+                    ui.menu_button(tl!("Page Numbers"), |ui| page_numbers_menu(ui, id, &item["numbering"], todo));
                     ui.separator();
                     if ui.button(tl!("Move to Trash")).clicked() {
                         *todo = Some(Do::Delete(id.to_string()));

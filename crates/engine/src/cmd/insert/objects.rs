@@ -163,8 +163,31 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     let props = s.typing_props();
     let at = delete_selection(s)?;
     let end = s.doc.insert_object(&at, obj, &props)?;
+    figure_paragraph(s, &end)?;
     s.sel = Selection::caret(end);
     Ok(json!({"media": key, "width": w, "height": h}))
+}
+
+/// A picture put on a line of its own in the body is a figure: its paragraph is centred and kept
+/// on the page of the paragraph after it, where its caption goes, so the two can't be parted
+/// and nothing typed elsewhere moves the picture off its place in the text. WordCraft's own
+/// (structure as you type); a picture inserted into a line of text stays as Word places it.
+fn figure_paragraph(s: &mut Session, at: &wordcraft_doc::Pos) -> Result<(), CmdError> {
+    let ac = &s.prefs.autocorrect;
+    if !ac.enabled || !ac.structure || at.story != wordcraft_doc::StoryRef::Body || at.path.0.len() != 1 {
+        return Ok(());
+    }
+    let alone = s.doc.para_at(at).is_some_and(|p| p.objects.len() == 1 && p.text.chars().all(|c| c == wordcraft_doc::para::OBJ || c.is_whitespace()));
+    if !alone {
+        return Ok(());
+    }
+    let para = s.doc.para_mut(at.story, &at.path)?;
+    para.props.keep_next = Some(true);
+    if para.props.align.is_none() {
+        para.props.align = Some(wordcraft_doc::props::Align::Center);
+    }
+    para.touch();
+    Ok(())
 }
 
 /// Insert › Icons: a library icon (original artwork drawn in code, `wordcraft_render::icon_lib`)

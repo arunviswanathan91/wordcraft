@@ -133,6 +133,9 @@ pub fn base_document(chapter_word: bool) -> Result<Document, String> {
             l.text = "Chapter %1".into();
         }
     }
+    // A page number at the foot of every page: the binder's numbering rules say what it shows.
+    s.run("insert.pageNumber", &json!({"position": "bottom", "align": "center"})).map_err(|e| e.to_string())?;
+    s.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 0));
     Ok(s.doc.clone())
 }
 

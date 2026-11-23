@@ -932,5 +932,8 @@ fn a_caption_is_kept_with_its_inline_picture() {
 
     let mut s = picture();
     s.run("references.caption", &json!({"text": "Kiln", "keepWithObject": false})).unwrap();
-    assert_eq!(keep(&s, 1), None);
+    // The picture's own paragraph is a figure's from when it was inserted on a line of its own
+    // (kept with what follows it); the caption command adds nothing.
+    assert_eq!(keep(&s, 1), Some(true));
+    assert_eq!(keep(&s, 2), None);
 }
