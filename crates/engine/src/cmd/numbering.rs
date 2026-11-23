@@ -27,6 +27,7 @@ use wordcraft_doc::{Block, Path, Pos, StoryRef};
 use crate::{CmdError, CmdResult, CommandSpec, Session};
 
 mod detect;
+pub(crate) mod typed;
 
 /// Most problems reported (and repaired by one command): a hostile document can't make the
 /// answer, or the repair loop, unbounded.

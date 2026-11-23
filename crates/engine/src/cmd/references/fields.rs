@@ -97,6 +97,82 @@ pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
     apply_results(&mut s.doc, refs)
 }
 
+/// Refresh the body's `REF` fields from the bookmarks they point at, as output does
+/// ([`output_fields`]): a reference to a caption's number shows the number it has now.
+pub fn update_refs(s: &mut Session) -> Result<(), CmdError> {
+    let refs = changed(&s.doc, ref_results(&s.doc, &s.doc));
+    apply_results(&mut s.doc, refs)
+}
+
+/// The most `\r n` resets looked at by [`heal_seq_pins`].
+const MAX_SEQ_PINS: usize = 500;
+
+/// Drop the `SEQ` resets the numbering has caught up with: a `\r n` whose field would show `n`
+/// without it. A caption typed with a number its place didn't give is pinned to that number; once
+/// the captions before it make the number its own, the pin goes, and the caption renumbers with
+/// the others from then on. Returns how many were dropped.
+pub fn heal_seq_pins(s: &mut Session) -> Result<usize, CmdError> {
+    let mut pins: Vec<(Path, usize, u32)> = Vec::new();
+    for path in s.doc.para_paths(StoryRef::Body) {
+        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+        for (k, o) in p.objects.iter().enumerate() {
+            let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+            let f = FieldCode::parse(instr);
+            if f.name == "SEQ"
+                && let Some(n) = f.arg('r').and_then(|r| r.parse::<u32>().ok())
+                && pins.len() < MAX_SEQ_PINS
+            {
+                pins.push((path.clone(), k, n));
+            }
+        }
+    }
+    let mut dropped = 0usize;
+    for (path, k, n) in pins {
+        let Some(InlineObject::Field { instr, .. }) = s.doc.para(StoryRef::Body, &path).and_then(|p| p.objects.get(k)) else { continue };
+        let with = instr.clone();
+        let without = strip_reset(&with);
+        if without == with {
+            continue;
+        }
+        let set = |s: &mut Session, text: &str| -> Result<(), CmdError> {
+            let para = s.doc.para_mut(StoryRef::Body, &path)?;
+            if let Some(InlineObject::Field { instr, .. }) = para.objects.get_mut(k) {
+                *instr = text.to_string();
+            }
+            para.touch();
+            Ok(())
+        };
+        set(s, &without)?;
+        let natural = seq_results(&s.doc).into_iter().find(|(st, p, i, _)| *st == StoryRef::Body && *p == path && *i == k).map(|(_, _, _, r)| r);
+        if natural.as_deref() == Some(n.to_string().as_str()) {
+            dropped += 1;
+        } else {
+            set(s, &with)?;
+        }
+    }
+    Ok(dropped)
+}
+
+/// `instr` without its `\r n` switch.
+fn strip_reset(instr: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut skip = false;
+    for w in instr.split_whitespace() {
+        if skip {
+            skip = false;
+            if w.parse::<u32>().is_ok() {
+                continue;
+            }
+        }
+        if w.eq_ignore_ascii_case("\\r") {
+            skip = true;
+            continue;
+        }
+        out.push(w);
+    }
+    out.join(" ")
+}
+
 /// A field's fresh result: its story and paragraph, its object index there and the text.
 type FieldResult = (StoryRef, Path, usize, String);
 

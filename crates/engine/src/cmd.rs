@@ -40,6 +40,7 @@ pub mod review;
 pub mod shape_fill;
 pub mod smart_art;
 pub mod speech;
+pub mod structure;
 pub mod table;
 pub mod table_draw;
 pub mod table_formula;
@@ -73,6 +74,7 @@ pub fn registry() -> Registry {
     v.extend(para::specs());
     v.extend(lists::specs());
     v.extend(numbering::specs());
+    v.extend(structure::specs());
     v.extend(inspector::specs());
     v.extend(view::specs());
     v.extend(outline::specs());

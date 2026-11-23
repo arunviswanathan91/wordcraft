@@ -113,7 +113,9 @@ fn enter(s: &mut Session, undo_step: bool) -> Result<(), CmdError> {
     let auto = border_line(s, &at)
         .map(EnterAutoFormat::Border)
         .or_else(|| table_line(s, &at).map(EnterAutoFormat::Table))
-        .or_else(|| heading_line(s, &at).map(EnterAutoFormat::Heading));
+        .or_else(|| heading_line(s, &at).map(EnterAutoFormat::Heading))
+        .or_else(|| crate::cmd::numbering::typed::enter_line(s, &at).map(EnterAutoFormat::Structure))
+        .or_else(|| crate::cmd::structure::enter_caption(s, &at).map(EnterAutoFormat::Caption));
     if let Some(auto) = auto {
         // Word: Undo right after reverts only the AutoFormat, so the typed characters come back
         // and the Enter stays. Record that plain Enter as its own undo step.
@@ -129,6 +131,17 @@ fn enter(s: &mut Session, undo_step: bool) -> Result<(), CmdError> {
             EnterAutoFormat::Border(line) => apply_border_line(s, &at, line)?,
             EnterAutoFormat::Table(cols) => apply_table_line(s, &at, &cols)?,
             EnterAutoFormat::Heading(level) => apply_heading_line(s, &at, level)?,
+            // A typed heading or caption: restyled where it is, and typing goes on below it.
+            EnterAutoFormat::Structure(line) => {
+                let end = crate::cmd::numbering::typed::apply_line(s, &at, &line)?;
+                let new = split_para(s, &end)?;
+                s.sel = Selection::caret(new);
+            }
+            EnterAutoFormat::Caption(c) => {
+                let end = crate::cmd::structure::apply_caption(s, &at, &c)?;
+                let new = split_para(s, &end)?;
+                s.sel = Selection::caret(new);
+            }
         }
         s.goal_x = None;
         if let Some((plain_doc, plain_sel)) = plain {

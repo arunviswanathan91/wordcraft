@@ -31,7 +31,8 @@ fn seq_ident(label: &str) -> String {
 }
 
 pub(super) fn table_of_figures(s: &mut Session, v: &Value) -> CmdResult {
-    generated_list_with(s, &figures_instr(v), "", p::str(v, "tabLeader").map(crate::cmd::references::leader))?;
+    let title: String = p::str(v, "title").unwrap_or("").chars().filter(|c| !c.is_control()).take(120).collect();
+    generated_list_with(s, &figures_instr(v), &title, p::str(v, "tabLeader").map(crate::cmd::references::leader))?;
     sel_result(s)
 }
 
@@ -350,11 +351,17 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
     let mut marks: Vec<(String, Pos)> = Vec::new();
     let figures = figures_label(kind);
     let bare = FieldCode::parse(kind).has('a');
+    // A list marked to show headings only: each caption's bold part (`structure.list`).
+    let headings_only = figures.as_ref().is_some_and(|id| {
+        let mark = format!("{}{id}", crate::cmd::structure::TITLES_BOOKMARK);
+        s.doc.bookmarks().iter().any(|(n, _)| n.eq_ignore_ascii_case(&mark))
+    });
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         if let Some(ident) = &figures {
             if captioned_as(&s.doc, p, ident) {
-                let text = if bare { caption_body(p, &ident.replace('_', " ")) } else { p.plain_text() };
+                let heading = if headings_only { crate::cmd::structure::caption_entry(&s.doc, p, bare) } else { None };
+                let text = heading.unwrap_or_else(|| if bare { caption_body(p, &ident.replace('_', " ")) } else { p.plain_text() });
                 marks.push((text, Pos { story: StoryRef::Body, path: path.clone(), off: 0 }));
             }
             continue;

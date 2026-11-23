@@ -86,7 +86,11 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let f = s.sel.focus.clone();
     let typed = s.doc.para_at(&f).cloned().map(|p| (p, s.sel.clone()));
     // A list label ("a. ") becomes a list before AutoCorrect could capitalise it.
-    let listed = text == " " && s.prefs.autocorrect.enabled && list_autoformat(s)?;
+    // A number typed in front of a numbered heading renumbers it ("2.2 " before "Methods").
+    let renumbered = text == " " && crate::cmd::numbering::typed::renumber_typed(s)?;
+    let listed = renumbered || (text == " " && s.prefs.autocorrect.enabled && list_autoformat(s)?);
+    // "Figure 2.1" in the text becomes a reference to that figure.
+    let listed = listed || crate::cmd::structure::mention_autoformat(s, text.len())?;
     if !listed {
         crate::cmd::tools::autocorrect(s).inspect_err(|_| s.autocap = None)?;
     }
@@ -248,6 +252,10 @@ pub(super) enum EnterAutoFormat {
     Table(Vec<usize>),
     /// A short line before an empty paragraph: Heading 1, 2 or 3.
     Heading(u8),
+    /// A line typed as a numbered heading or an appendix heading ("2.1 Methods").
+    Structure(crate::cmd::numbering::typed::Line),
+    /// A line typed as a caption ("Figure 2.1: Cell counts").
+    Caption(crate::cmd::structure::CaptionLine),
 }
 
 /// AutoFormat border lines: Enter after "---", "___", "===", "***", "~~~" or "###". A line

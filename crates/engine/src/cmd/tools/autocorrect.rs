@@ -103,6 +103,11 @@ pub struct AutoCorrectPrefs {
     /// A second Space after a word, number or closing bracket or quote turns the first into a
     /// period (macOS's "Add period with double-space"); off by default.
     pub double_space_period: bool,
+    /// Structure as you type: Enter after a line typed as "2.1 Methods", "Chapter 3: Results",
+    /// "Appendix A" or "Figure 2.1: A caption" makes it a numbered heading, an appendix heading
+    /// or a caption; a number typed in front of a numbered heading renumbers it; and "Figure 2.1"
+    /// typed in the text becomes a reference to that figure. WordCraft's own, on by default.
+    pub structure: bool,
     /// The user's entries: added, or replacing a built-in one.
     pub entries: Vec<(String, String)>,
     /// Built-in entries the user deleted.
@@ -142,6 +147,7 @@ impl Default for AutoCorrectPrefs {
             tab_indent: false,
             heading_styles: false,
             double_space_period: false,
+            structure: true,
             entries: Vec::new(),
             removed: Vec::new(),
             exceptions: Vec::new(),
@@ -337,6 +343,7 @@ pub(super) fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
         ("tabIndent", &mut ac.tab_indent),
         ("headingStyles", &mut ac.heading_styles),
         ("doubleSpacePeriod", &mut ac.double_space_period),
+        ("structure", &mut ac.structure),
         ("autoAddFirstLetter", &mut ac.auto_add_first_letter),
         ("autoAddInitialCaps", &mut ac.auto_add_initial_caps),
     ] {
@@ -414,6 +421,7 @@ pub(super) fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
         "tabIndent": ac.tab_indent,
         "headingStyles": ac.heading_styles,
         "doubleSpacePeriod": ac.double_space_period,
+        "structure": ac.structure,
         "autoAddFirstLetter": ac.auto_add_first_letter,
         "autoAddInitialCaps": ac.auto_add_initial_caps,
         "entries": ac.list().into_iter().map(|(a, b, builtin)| json!({"from": a, "to": b, "builtIn": builtin})).collect::<Vec<_>>(),
