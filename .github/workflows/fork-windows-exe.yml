@@ -1,0 +1,73 @@
+# This fork's own: builds wordcraft.exe on a Windows runner and offers it as a download, because
+# the release build needs more memory than the owner's machine has free. It is not one of the
+# shared storytold/craft-common-actions workflows, so leave it out of any pull request to
+# upstream (house rule 11: CI stays shared).
+name: Fork · Windows exe
+
+on:
+  push:
+    branches: [thesis-first]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-windows-exe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exe:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the language data revision
+        id: i18n
+        shell: bash
+        run: echo "rev=$(tr -d '[:space:]' < craft-i18n.rev)" >> "$GITHUB_OUTPUT"
+
+      # Spelling word lists and hyphenation patterns (optional build input, see AGENTS.md).
+      - uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: storytold/craft-i18n
+          ref: ${{ steps.i18n.outputs.rev }}
+          path: craft-i18n
+
+      - name: Point the build at the language data
+        shell: bash
+        run: |
+          if [ -d craft-i18n/language-data ]; then
+            echo "CRAFT_I18N_DIR=$GITHUB_WORKSPACE/craft-i18n" >> "$GITHUB_ENV"
+          fi
+
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup update stable
+          rustup default stable
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the app and the command-line tool
+        run: cargo build --release --locked -p wordcraft -p wordcraft-cli
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wordcraft-windows-x64
+          path: |
+            target/release/wordcraft.exe
+            target/release/wordcraft-cli.exe
+          if-no-files-found: error
+
+      # After the upload, so a failing test still leaves the exe to try.
+      - name: Structure and project tests
+        run: |
+          cargo test --release --locked -p wordcraft-engine --lib -- structure typed:: references::
+          cargo test --release --locked -p wordcraft-manuscript
+
+      - name: Thesis interface tests
+        run: cargo test --release --locked -p wordcraft-ui-egui --lib -- thesis
